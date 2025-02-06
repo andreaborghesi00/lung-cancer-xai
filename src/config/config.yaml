@@ -7,7 +7,7 @@ epochs: 50
 learning_rate: 0.001
 dropout_rate: 0.5
 
-data_path: "../../data/slices_segmentate_png"
-annotation_path: "../../data/annotations.csv"
-log_dir: "../../logs"
-checkpoint_dir: "../../checkpoints"
+data_path: "data/slices_segmentate_png"
+annotation_path: "data/annotations.csv"
+log_dir: "logs"
+checkpoint_dir: "checkpoints"
