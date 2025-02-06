@@ -1,0 +1,13 @@
+experiment_name: "dev"
+image_input_channels: 1
+num_classes: 2
+
+batch_size: 64
+epochs: 50
+learning_rate: 0.001
+dropout_rate: 0.5
+
+data_path: "../../data/slices_segmentate_png"
+annotation_path: "../../data/annotations.csv"
+log_dir: "../../logs"
+checkpoint_dir: "../../checkpoints"
