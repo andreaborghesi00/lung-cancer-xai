@@ -15,12 +15,13 @@ class ModelConfig:
     num_classes: int = 2
     output_dim: int = 4
     
-    
     # Training hyperparameters
     batch_size: int = 32
     epochs: int = 100
     learning_rate: float = 1e-3
     dropout_rate: float = 0.3
+    dl_workers: int = 4
+    use_wandb: bool = True
 
     # Paths and Logging
     data_path: str = "data/slices_segmentate_png"

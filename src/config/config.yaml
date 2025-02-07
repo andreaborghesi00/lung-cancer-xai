@@ -1,11 +1,12 @@
 experiment_name: "dev"
 image_input_channels: 1
-num_classes: 2
+output_dim: 4
 
-batch_size: 64
-epochs: 50
+batch_size: 8
+epochs: 4
 learning_rate: 0.001
 dropout_rate: 0.5
+use_wandb: True
 
 data_path: "data/slices_segmentate_png"
 annotation_path: "data/annotations.csv"
