@@ -11,14 +11,34 @@ from pathlib import Path
 from utils.utils import setup_logging
 
 @dataclass
-class Preprocessor():
+class ROIPreprocessor():
     logger: logging.Logger = field(init=False)
     
     def __post_init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
         setup_logging()
         
+    def normalize_image(self, image: np.ndarray) -> np.ndarray:
+        """
+        Normalize the image to have values between 0 and 1
+        """
+        return image.astype(np.float32) / 255.0
+    
+    def normalize_bbox(self, bbox: np.ndarray, image_size: tuple = (512, 512)) -> np.ndarray:
+        """
+        Normalize bounding box coordinates between 0 and 1
+        """
+        norm_bbox = bbox.copy()
+        self.logger.debug(f"types: {type(norm_bbox[0])}, {type(image_size[0])}")
+        norm_bbox[[0, 2]] /= image_size[0]
+        norm_bbox[[1, 3]] /= image_size[1]
+        
+        return norm_bbox
+        
     def load_data_labels(self) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Load data and labels from the data path and annotation file specified in the config
+        """
         config = get_config()
         
         self.logger.info(f"Loading data from {config.data_path}")
@@ -39,12 +59,19 @@ class Preprocessor():
             image_path = os.path.join(config.data_path, row["uid_slice"] + '.png')
             try:
                 image = Image.open(image_path)
+                
             except FileNotFoundError as e:
                 missed_images += 1
                 continue
             
-            data.append(np.array(image))
-            labels.append(np.array([row["x"], row["y"], row["width"], row["height"]]))
+            image_arr = np.array(image)
+            bbox_arr = np.array([row["x"], row["y"], row["width"], row["height"]], dtype=np.float32)
+            
+            image_norm = self.normalize_image(image_arr)
+            bbox_norm = self.normalize_bbox(bbox_arr, image_arr.shape)
+            
+            data.append(image_norm)
+            labels.append(bbox_norm)
             
         if missed_images == total_images:
             self.logger.error("No images loaded, check the data path and annotation file")
@@ -55,5 +82,6 @@ class Preprocessor():
         
         self.logger.info(f"Loaded {total_images - missed_images} images, missed {missed_images}")
         self.logger.info(f"Data shape: {data.shape}, Labels shape: {labels.shape}")
+        self.logger.info(f"Images and bounding boxes normalized")
         
         return data, labels
