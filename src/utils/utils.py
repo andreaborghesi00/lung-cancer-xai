@@ -15,8 +15,8 @@ def greyscale_to_rgb(image):
     # return np.stack([image, image, image], axis=2)
     return np.repeat(image[..., np.newaxis], 3, axis=-1)
 
-def setup_logging():
+def setup_logging(level=logging.INFO):
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
