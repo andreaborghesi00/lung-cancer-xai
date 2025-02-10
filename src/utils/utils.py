@@ -1,5 +1,6 @@
 import numpy as np
 import logging
+import torch.nn as nn
 
 def roi_overlay(image, roi, color=(255, 0, 0), lw=2):
     x, y, w, h = roi
@@ -20,3 +21,6 @@ def setup_logging(level=logging.INFO):
         level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
+    
+def count_parameters(model: nn.Module):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
