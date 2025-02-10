@@ -1,16 +1,16 @@
-from config.config import get_config
-from config.config import ModelConfig
-from data.preprocessing import ROIPreprocessor
-from data.image_dataset import ImageDataset
-from sklearn.model_selection import train_test_split
-import numpy as np
-import pandas as pd
 import logging
 from utils.utils import setup_logging
-from models.roi_regressor import RoiRegressor
+from config.config import get_config
 import torch
+from sklearn.model_selection import train_test_split
+from data.preprocessing import ROIPreprocessor
+from data.image_dataset import ImageDataset
+from data.rcnn_dataset import FasterRCNNDataset
+from models.roi_regressor import RoiRegressor
+from models.faster_rcnn import FasterRCNN
 from training.trainer import ROITrainer
-
+from training.rcnn_trainer import RCNNTrainer
+import gc
 
 if __name__ == "__main__":
     config = get_config()
@@ -32,30 +32,34 @@ if __name__ == "__main__":
     
     # datasets and dataloaders
     logger.info("Creating datasets and dataloaders")
-    train_ds = ImageDataset(X_train, y_train)
-    val_ds = ImageDataset(X_val, y_val)
+    train_ds = FasterRCNNDataset(X_train, y_train)
+    val_ds = FasterRCNNDataset(X_val, y_val)
     
     logger.info("Creating dataloaders")
     train_dl = train_ds.get_loader(shuffle=True)
     val_dl = val_ds.get_loader()
   
+    # free memory
+    del X_train, X_val, y_train, y_val, X_valtest, y_valtest, train_ds, val_ds, data, labels
+    gc.collect() # garbage collection
+    
     # model definition
     logger.info("Creating the model")
-    model = RoiRegressor().to(device)
+    model = FasterRCNN()
       
     # optimizer and scheduler
     logger.info("Initializing optimizer and scheduler")
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=4)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=4)
     
     # training
     logger.info("Initializing trainer")
-    trainer = ROITrainer(
+    trainer = RCNNTrainer(
         model=model,
         optimizer=optimizer,
+        scheduler=scheduler,
         train_loader=train_dl,
         val_loader=val_dl,
-        scheduler=scheduler,
         device=device,
         checkpoint_dir=config.checkpoint_dir,
         use_wandb=config.use_wandb
@@ -64,16 +68,14 @@ if __name__ == "__main__":
     logger.info("Training the model")
     trainer.train(num_epochs=config.epochs)
     
+    # free memory
+    del train_dl, val_dl
+    gc.collect() # garbage collection
+    
     # testing
     logger.info("Testing the model")
-    test_ds = ImageDataset(X_test, y_test)
+    test_ds = FasterRCNNDataset(X_test, y_test)
     test_dl = test_ds.get_loader()
     test_metrics = trainer.validation(test_dl) 
     
     logger.info(f"Test metrics: {test_metrics}")
-    
-    
-    
-    
-    
-
