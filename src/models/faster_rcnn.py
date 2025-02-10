@@ -2,18 +2,17 @@ import torch
 import torch.nn as nn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
-from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2, FasterRCNN_ResNet50_FPN_V2_Weights
+from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2, FasterRCNN_ResNet50_FPN_V2_Weights, fasterrcnn_mobilenet_v3_large_fpn, FasterRCNN_MobileNet_V3_Large_FPN_Weights
 from torchvision.models import ResNet18_Weights
 
 
-class FasterRCNN(nn.Module):
-    def __init__(self, num_classes=2, pretrained = True): # 2 classes: background and tumor
+class FasterRCNNResnet50B18(nn.Module):
+    def __init__(self, num_classes=2): # 2 classes: background and tumor
         super().__init__()
         
+        self.weights = ResNet18_Weights.DEFAULT
+        backbone = resnet_fpn_backbone('resnet18', weights=self.weights)
         
-        backbone = resnet_fpn_backbone('resnet18', weights=ResNet18_Weights.DEFAULT)
-        
-        weights = FasterRCNN_ResNet50_FPN_V2_Weights.DEFAULT
         self.model = fasterrcnn_resnet50_fpn_v2(
             # RPN parameters
             rpn_pre_nms_top_n_train=2000,  # Number of proposals to keep before NMS (during training)
@@ -45,8 +44,32 @@ class FasterRCNN(nn.Module):
         # replace the pre-trained head with a new one
         self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
     
+    def get_transform(self):
+        return self.weights.transforms
+    
     def forward(self, images, targets=None):
         if self.training:
             return self.model(images, targets) # training, internally computes the loss
         
         return self.model(images) # inference only
+    
+class FasterRCNNMobileNet(nn.Module):
+    def __init__(self, num_classes=2):
+        super().__init__()
+        self.weights = FasterRCNN_MobileNet_V3_Large_FPN_Weights.DEFAULT
+        self.transforms = FasterRCNN_MobileNet_V3_Large_FPN_Weights.DEFAULT.transforms
+        self.model = fasterrcnn_mobilenet_v3_large_fpn(weights=self.weights) # as of now it expects 91 classes (COCO dataset)
+        
+        # change the number of expected classes
+        in_features = self.model.roi_heads.box_predictor.cls_score.in_features
+        self.model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+        
+    def get_transform(self):
+        return self.weights.transforms()
+    
+    def forward(self, images, targets=None):
+        if self.training:
+            return self.model(images, targets)
+        
+        return self.model(images)
+            
