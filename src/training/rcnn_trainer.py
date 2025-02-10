@@ -145,12 +145,14 @@ class RCNNTrainer():
                 wandb.log({"train_loss": losses.item()})
             
             self.optimizer.step()
-            
             total_loss += losses.item()
-            pbar.set_postfix({"RCNN loss": losses.item()})
+            
+            loss_dict["total_loss"] = losses
+            loss_dict = {k: v.item() for k, v in loss_dict.items()}
+            pbar.set_postfix(loss_dict)
         
         metrics = {
-            "rcnn_loss": total_loss / len(dl) # average loss
+            "rcnn_avg_loss": total_loss / len(dl) # average loss
         }
         
         return metrics
@@ -173,7 +175,6 @@ class RCNNTrainer():
                 
                 formatted_preds = self._format_box_for_map(formatted_preds, is_prediction=True)
                 targets = self._format_box_for_map(targets)
-                self.val_metrics["iou"].update(formatted_preds, targets)
     
                 try:
                     self.val_metrics["iou"].update(formatted_preds, targets)
