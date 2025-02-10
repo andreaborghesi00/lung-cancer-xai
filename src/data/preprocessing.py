@@ -2,21 +2,28 @@ import pandas as pd
 import numpy as np
 from PIL import Image
 import config
-from typing import Tuple, List
+from typing import Tuple, List, Optional, Callable, Any
 from dataclasses import dataclass, field
 from config.config import get_config
 import logging
 import os
 from pathlib import Path
-from utils.utils import setup_logging
+import utils.utils as utils
+from torchvision.transforms import v2 as T
+import torch
+
 
 @dataclass
 class ROIPreprocessor():
     logger: logging.Logger = field(init=False)
+    transform: Optional[Callable] = field(default=None)
     
     def __post_init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
-        setup_logging()
+        utils.setup_logging()
+        if self.transform is None:
+            self.logger.warning("No transform provided, only basic conversion to tensor and normalization will be applied")
+            # self.transform = T.ToImage() # only convert to tensor
         
     def normalize_image(self, image: np.ndarray) -> np.ndarray:
         """
@@ -34,6 +41,26 @@ class ROIPreprocessor():
         norm_bbox[[1, 3]] /= image_size[1]
         
         return norm_bbox
+    
+    # return tensor like func() -> 
+    def _load_image(self, image_path: str) -> torch.Tensor:
+        """
+        Load an image from the specified path
+        """
+        try:
+            # as rgb
+            image = Image.open(image_path).convert('RGB') # although our ct-scans are 1-channel only, the transforms require 3 channels
+            if self.transform is None:
+                image = np.array(image)
+                image = self.normalize_image(image)
+                image = T.ToTensor()(image)
+            else:
+                image = self.transform(image)
+                
+        except FileNotFoundError as e:
+            raise
+        
+        return image 
     
     @staticmethod
     def xywh_to_xyxy(bbox: np.ndarray) -> np.ndarray:
@@ -57,7 +84,49 @@ class ROIPreprocessor():
         
         return bbox_xywh
         
-    def load_data_labels(self) -> Tuple[np.ndarray, np.ndarray]:
+    def load_paths_labels(self) -> Tuple[List[str], torch.Tensor]:
+        """
+        Load paths and labels from the data path and annotation file specified in the config
+        """
+        config = get_config()
+        
+        self.logger.info(f"Loading data from {config.data_path}")
+        
+        try:
+            annotation_df = pd.read_csv(config.annotation_path)
+        except FileNotFoundError as e:
+            self.logger.error(f"Error loading annotation file at path {config.annotation_path}: {str(e)}")
+            raise
+        
+        image_paths =[]
+        bboxes = []
+
+        total_images = len(annotation_df)
+        missed_images = 0
+        
+        for _, row in annotation_df.iterrows():
+            image_path = os.path.join(config.data_path, row["uid_slice"] + '.png')
+            if not Path(image_path).exists():
+                missed_images += 1
+                continue
+            
+            # reads bbox as xyxy directly
+            bbox = torch.tensor([row["x"], row["y"], row["x"] + row["width"], row["y"] + row["height"]], dtype=torch.float32)
+            
+            image_paths.append(image_path)        
+            bboxes.append(bbox)
+            bboxes_tensor = torch.stack(bboxes)
+        if missed_images == total_images:
+            self.logger.error("No images loaded, check the data path and annotation file")
+            raise ValueError("No images loaded")
+        
+        self.logger.info(f"Loaded {total_images - missed_images} images, missed {missed_images}")
+        self.logger.info(f"Data shape: {len(image_paths)}, Labels shape: {len(bboxes)}")
+        self.logger.info(f"Images and bounding boxes normalized")
+        
+        return np.array(image_paths), bboxes_tensor
+    
+    def load_data_labels(self) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Load data and labels from the data path and annotation file specified in the config
         """
@@ -71,8 +140,8 @@ class ROIPreprocessor():
             self.logger.error(f"Error loading annotation file at path {config.annotation_path}: {str(e)}")
             raise
         
-        data: List[np.ndarray] = []
-        labels: List[np.ndarray] = []
+        images =[]
+        bboxes = []
 
         total_images = len(annotation_df)
         missed_images = 0
@@ -80,31 +149,28 @@ class ROIPreprocessor():
         for _, row in annotation_df.iterrows():
             image_path = os.path.join(config.data_path, row["uid_slice"] + '.png')
             try:
-                image = Image.open(image_path)
+                image = self._load_image(image_path)
                 
             except FileNotFoundError as e:
                 missed_images += 1
                 continue
             
-            image_arr = np.array(image)
-            bbox_arr = np.array([row["x"], row["y"], row["width"], row["height"]], dtype=np.float32)
+            # reads bbox as xyxy directly
+            bbox = torch.tensor([row["x"], row["y"], row["x"] + row["width"], row["y"] + row["height"]], dtype=torch.float32)
             
-            image_norm = self.normalize_image(image_arr)
-            bbox_norm = self.normalize_bbox(bbox_arr, image_arr.shape)
-            bbox_xyxy = self.xywh_to_xyxy(bbox_norm)
-            
-            data.append(image_norm)
-            labels.append(bbox_xyxy)
-            
+            images.append(image)
+            bboxes.append(bbox)
+        
         if missed_images == total_images:
             self.logger.error("No images loaded, check the data path and annotation file")
             raise ValueError("No images loaded")
         
-        data = np.array(data)
-        labels = np.array(labels)
+        images_tensor = torch.stack(images)
+        del images # trying to survive here
+        bboxes_tensor = torch.stack(bboxes)
         
         self.logger.info(f"Loaded {total_images - missed_images} images, missed {missed_images}")
-        self.logger.info(f"Data shape: {data.shape}, Labels shape: {labels.shape}")
+        self.logger.info(f"Data shape: {images_tensor.shape}, Labels shape: {bboxes_tensor.shape}")
         self.logger.info(f"Images and bounding boxes normalized")
         
-        return data, labels
+        return images_tensor, bboxes_tensor
