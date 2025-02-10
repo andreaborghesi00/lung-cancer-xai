@@ -34,6 +34,28 @@ class ROIPreprocessor():
         norm_bbox[[1, 3]] /= image_size[1]
         
         return norm_bbox
+    
+    @staticmethod
+    def xywh_to_xyxy(bbox: np.ndarray) -> np.ndarray:
+        """
+        Convert bounding box from (x, y, w, h) to (x1, y1, x2, y2) format
+        """
+        bbox_xyxy = bbox.copy()
+        bbox_xyxy[2] += bbox[0]
+        bbox_xyxy[3] += bbox[1]
+        
+        return bbox_xyxy
+    
+    @staticmethod
+    def xyxy_to_xywh(bbox: np.ndarray) -> np.ndarray:
+        """
+        Convert bounding box from (x1, y1, x2, y2) to (x, y, w, h) format
+        """
+        bbox_xywh = bbox.copy()
+        bbox_xywh[2] -= bbox[0]
+        bbox_xywh[3] -= bbox[1]
+        
+        return bbox_xywh
         
     def load_data_labels(self) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -69,9 +91,10 @@ class ROIPreprocessor():
             
             image_norm = self.normalize_image(image_arr)
             bbox_norm = self.normalize_bbox(bbox_arr, image_arr.shape)
+            bbox_xyxy = self.xywh_to_xyxy(bbox_norm)
             
             data.append(image_norm)
-            labels.append(bbox_norm)
+            labels.append(bbox_xyxy)
             
         if missed_images == total_images:
             self.logger.error("No images loaded, check the data path and annotation file")
