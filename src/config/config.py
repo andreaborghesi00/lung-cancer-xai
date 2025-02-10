@@ -30,12 +30,26 @@ class ModelConfig:
     checkpoint_dir: str = "checkpoints"
     
     def validate(self):
+        assert self.experiment_name, "Experiment name must be specified"
+        assert self.project_dir, "Project directory must be specified"
+        
         assert self.image_input_channels > 0, "Image input channels must be greater than 0"
+        assert isinstance(self.image_input_channels, int), "Image input channels must be an integer"
         assert self.num_classes > 0, "Number of classes must be greater than 0"
+        assert isinstance(self.num_classes, int), "Number of classes must be an integer"
+        assert self.output_dim > 0, "Output dimension must be greater than 0"
+        assert isinstance(self.output_dim, int), "Output dimension must be an integer"
+        
         assert self.batch_size > 0, "Batch size must be greater than 0"
+        assert isinstance(self.batch_size, int), "Batch size must be an integer"
         assert self.epochs > 0, "Number of epochs must be greater than 0"
+        assert isinstance(self.epochs, int), "Number of epochs must be an integer"
         assert self.learning_rate > 0, "Learning rate must be greater than 0"
         assert 0 <= self.dropout_rate < 1, "Dropout rate must be between 0 and 1"
+        assert self.dl_workers > 0, "Number of dataloader workers must be greater than 0"
+        assert isinstance(self.dl_workers, int), "Number of dataloader workers must be an integer"
+        assert isinstance(self.use_wandb, bool), "Use wandb must be a boolean"
+        
         assert self.data_path, "Data path must be specified"
         assert self.annotation_path, "Annotation path must be specified"
         assert self.log_dir, "Log directory must be specified"
