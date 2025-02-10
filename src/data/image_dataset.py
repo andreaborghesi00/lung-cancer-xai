@@ -16,6 +16,7 @@ class ImageDataset(Dataset):
         
         self.logger.info(f"Converting data and annotations to tensors")
         self.data = torch.tensor(data, dtype=torch.float32)
+        self.data = self.data.unsqueeze(1) # add channel dimension
         self.annotations = torch.tensor(annotations, dtype=torch.float32)
         self.logger.info(f"Converted data and annotations to tensors")
     
