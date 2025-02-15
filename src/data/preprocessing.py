@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from PIL import Image
 import config
-from typing import Tuple, List, Optional, Callable, Any
+from typing import Tuple, List, Optional, Callable, Any, Union
 from dataclasses import dataclass, field
 from config.config import get_config
 import logging
@@ -11,7 +11,7 @@ from pathlib import Path
 import utils.utils as utils
 from torchvision.transforms import v2 as T
 import torch
-
+from multipledispatch import dispatch
 
 @dataclass
 class ROIPreprocessor():
@@ -19,6 +19,7 @@ class ROIPreprocessor():
     transform: Optional[Callable] = field(default=None)
     
     def __post_init__(self):
+        self.config = get_config()
         self.logger = logging.getLogger(self.__class__.__name__)
         utils.setup_logging()
         if self.transform is None:
@@ -84,93 +85,160 @@ class ROIPreprocessor():
         
         return bbox_xywh
         
-    def load_paths_labels(self) -> Tuple[List[str], torch.Tensor]:
-        """
-        Load paths and labels from the data path and annotation file specified in the config
-        """
-        config = get_config()
         
-        self.logger.info(f"Loading data from {config.data_path}")
+    def load_tomography_ids(self) -> List[Tuple[str, str]]:
+        """
+        Load the unique couples (pid, dcm_series) from the annotation file
+        """
         
+
+        self.logger.info(f"Loading data from {self.config.annotation_path}")
         try:
-            annotation_df = pd.read_csv(config.annotation_path)
+            annotation_df = pd.read_csv(self.config.annotation_path)
         except FileNotFoundError as e:
-            self.logger.error(f"Error loading annotation file at path {config.annotation_path}: {str(e)}")
+            self.logger.error(f"Error loading annotation file at path {self.config.annotation_path}: {str(e)}")
             raise
         
-        image_paths =[]
-        bboxes = []
-
-        total_images = len(annotation_df)
-        missed_images = 0
-        
+        tomography_ids: List[Tuple[str, str]] = []
         for _, row in annotation_df.iterrows():
-            image_path = os.path.join(config.data_path, row["uid_slice"] + '.png')
-            if not Path(image_path).exists():
-                missed_images += 1
-                continue
-            
-            # reads bbox as xyxy directly
-            bbox = torch.tensor([row["x"], row["y"], row["x"] + row["width"], row["y"] + row["height"]], dtype=torch.float32)
-            
-            image_paths.append(image_path)        
-            bboxes.append(bbox)
-            bboxes_tensor = torch.stack(bboxes)
-        if missed_images == total_images:
-            self.logger.error("No images loaded, check the data path and annotation file")
-            raise ValueError("No images loaded")
+            tomography_ids.append((row["pid"], row["dcm_series"]))
         
-        self.logger.info(f"Loaded {total_images - missed_images} images, missed {missed_images}")
-        self.logger.info(f"Data shape: {len(image_paths)}, Labels shape: {len(bboxes)}")
-        self.logger.info(f"Images and bounding boxes normalized")
+        tot_ids = len(tomography_ids)
         
-        return np.array(image_paths), bboxes_tensor
-    
-    def load_data_labels(self) -> Tuple[torch.Tensor, torch.Tensor]:
+        # remove duplicates
+        tomography_ids = list(set(tomography_ids))
+        
+        self.logger.info(f"Loaded {len(tomography_ids)} unique tomography ids out of {tot_ids}")
+        
+        return tomography_ids
+
+
+
+    def load_paths_labels(self, tomography_id: Union[Tuple[str, str], List[Tuple[str, str]]]) -> Tuple[List[str], torch.Tensor]:
         """
-        Load data and labels from the data path and annotation file specified in the config
+        Load slice paths and bboxes of the specified tomography id
         """
-        config = get_config()
-        
-        self.logger.info(f"Loading data from {config.data_path}")
-        
         try:
-            annotation_df = pd.read_csv(config.annotation_path)
+            annotation_df = pd.read_csv(self.config.annotation_path)
         except FileNotFoundError as e:
-            self.logger.error(f"Error loading annotation file at path {config.annotation_path}: {str(e)}")
+            self.logger.error(f"Error loading annotation file at path {self.config.annotation_path}: {str(e)}")
             raise
         
-        images =[]
-        bboxes = []
-
-        total_images = len(annotation_df)
-        missed_images = 0
+        if isinstance(tomography_id, tuple):
+            tomography_id = [tomography_id]
         
-        for _, row in annotation_df.iterrows():
-            image_path = os.path.join(config.data_path, row["uid_slice"] + '.png')
-            try:
-                image = self._load_image(image_path)
+        image_paths = []
+        bboxes = []
+        missed_paths = 0
+        
+        for pid, dcm_series in tomography_id:
+            for _, row in annotation_df[(annotation_df["pid"] == pid) & (annotation_df["dcm_series"] == dcm_series)].iterrows():
+                image_path = os.path.join(self.config.data_path, row["uid_slice"] + '.png')
+                if not Path(image_path).exists():
+                    missed_paths += 1
+                    continue
                 
-            except FileNotFoundError as e:
-                missed_images += 1
-                continue
-            
-            # reads bbox as xyxy directly
-            bbox = torch.tensor([row["x"], row["y"], row["x"] + row["width"], row["y"] + row["height"]], dtype=torch.float32)
-            
-            images.append(image)
-            bboxes.append(bbox)
+                bbox = torch.tensor([row["x"], row["y"], row["x"] + row["width"], row["y"] + row["height"]], dtype=torch.float32)
+                
+                image_paths.append(image_path)
+                bboxes.append(bbox)
         
-        if missed_images == total_images:
+        if missed_paths == len(tomography_id):
             self.logger.error("No images loaded, check the data path and annotation file")
             raise ValueError("No images loaded")
+
+        self.logger.info(f"Loaded {len(image_paths)} images, missed {missed_paths}")
+        self.logger.info(f"Data shape: {len(image_paths)}, Labels shape: {len(bboxes)}")
         
-        images_tensor = torch.stack(images)
-        del images # trying to survive here
-        bboxes_tensor = torch.stack(bboxes)
+        bbox_tensor = torch.stack(bboxes)
+        return np.array(image_paths), bbox_tensor
         
-        self.logger.info(f"Loaded {total_images - missed_images} images, missed {missed_images}")
-        self.logger.info(f"Data shape: {images_tensor.shape}, Labels shape: {bboxes_tensor.shape}")
-        self.logger.info(f"Images and bounding boxes normalized")
+    # def load_paths_labels(self) -> Tuple[List[str], torch.Tensor]:
+    #     """
+    #     Load paths and labels from the data path and annotation file specified in the config
+    #     """
         
-        return images_tensor, bboxes_tensor
+        
+    #     self.logger.info(f"Loading data from {self.config.data_path}")
+        
+    #     try:
+    #         annotation_df = pd.read_csv(self.config.annotation_path)
+    #     except FileNotFoundError as e:
+    #         self.logger.error(f"Error loading annotation file at path {self.config.annotation_path}: {str(e)}")
+    #         raise
+        
+    #     image_paths =[]
+    #     bboxes = []
+
+    #     total_images = len(annotation_df)
+    #     missed_images = 0
+        
+    #     for _, row in annotation_df.iterrows():
+    #         image_path = os.path.join(self.config.data_path, row["uid_slice"] + '.png')
+    #         if not Path(image_path).exists():
+    #             missed_images += 1
+    #             continue
+            
+    #         # reads bbox as xyxy directly
+    #         bbox = torch.tensor([row["x"], row["y"], row["x"] + row["width"], row["y"] + row["height"]], dtype=torch.float32)
+            
+    #         image_paths.append(image_path)        
+    #         bboxes.append(bbox)
+    #     bboxes_tensor = torch.stack(bboxes)
+    #     if missed_images == total_images:
+    #         self.logger.error("No images loaded, check the data path and annotation file")
+    #         raise ValueError("No images loaded")
+        
+    #     self.logger.info(f"Loaded {total_images - missed_images} images, missed {missed_images}")
+    #     self.logger.info(f"Data shape: {len(image_paths)}, Labels shape: {len(bboxes)}")
+        
+    #     return np.array(image_paths), bboxes_tensor
+    
+    # def load_data_labels(self) -> Tuple[torch.Tensor, torch.Tensor]:
+    #     """
+    #     Load data and labels from the data path and annotation file specified in the config
+    #     """
+        
+        
+    #     self.logger.info(f"Loading data from {self.config.data_path}")
+        
+    #     try:
+    #         annotation_df = pd.read_csv(self.config.annotation_path)
+    #     except FileNotFoundError as e:
+    #         self.logger.error(f"Error loading annotation file at path {self.config.annotation_path}: {str(e)}")
+    #         raise
+        
+    #     images =[]
+    #     bboxes = []
+
+    #     total_images = len(annotation_df)
+    #     missed_images = 0
+        
+    #     for _, row in annotation_df.iterrows():
+    #         image_path = os.path.join(self.config.data_path, row["uid_slice"] + '.png')
+    #         try:
+    #             image = self._load_image(image_path)
+                
+    #         except FileNotFoundError as e:
+    #             missed_images += 1
+    #             continue
+            
+    #         # reads bbox as xyxy directly
+    #         bbox = torch.tensor([row["x"], row["y"], row["x"] + row["width"], row["y"] + row["height"]], dtype=torch.float32)
+            
+    #         images.append(image)
+    #         bboxes.append(bbox)
+        
+    #     if missed_images == total_images:
+    #         self.logger.error("No images loaded, check the data path and annotation file")
+    #         raise ValueError("No images loaded")
+        
+    #     images_tensor = torch.stack(images)
+    #     del images # trying to survive here
+    #     bboxes_tensor = torch.stack(bboxes)
+        
+    #     self.logger.info(f"Loaded {total_images - missed_images} images, missed {missed_images}")
+    #     self.logger.info(f"Data shape: {images_tensor.shape}, Labels shape: {bboxes_tensor.shape}")
+    #     self.logger.info(f"Images and bounding boxes normalized")
+        
+    #     return images_tensor, bboxes_tensor

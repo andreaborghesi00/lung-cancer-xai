@@ -218,5 +218,5 @@ class RCNNTrainer():
             
             if val_metrics["iou"] > best_val_loss:
                 best_val_loss = val_metrics["iou"]
-                self.save_checkpoint(epoch, metrics)
+                self.save_checkpoint(epoch+1, metrics) # the +1 is just to be consistent with the logs, epochs start at 1
                 
