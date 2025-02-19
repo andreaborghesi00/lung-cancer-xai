@@ -5,3 +5,4 @@ logs/*
 *.pyc
 wandb/*
 visualizations/*
+src/notebooks/scrap.ipynb
