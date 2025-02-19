@@ -56,11 +56,14 @@ class DynamicRCNNDataset(Dataset):
 
     def _load_image(self, image_path: str) -> torch.Tensor:
         image = Image.open(image_path).convert('RGB') # although our ct-scans are 1-channel only, the transforms require 3 channels
+        image = np.array(image)
+        image = ROIPreprocessor.normalize_background(image)
         if self.transform is None:
-            image = np.array(image)
             image = self.preprocessor.normalize_image(image)
             image = T.Compose([T.ToImage(), T.ToDtype(torch.float32, scale=True)])(image)
         else:
+            # back to PIL image, this is so inefficient, but necessary for the transforms
+            image = Image.fromarray(image)
             image = self.transform(image)
         return image
 
