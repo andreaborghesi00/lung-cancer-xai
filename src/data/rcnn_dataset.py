@@ -23,9 +23,6 @@ class StaticRCNNDataset(Dataset):
     def __len__(self):
         return len(self.images)
 
-    # def __get_item__(self, idx):
-    #     return self.images[idx], self.boxes[idx]
-    
     def __getitem__(self, idx):
         target = {
             "boxes": self.boxes[idx].view(-1, 4), # ensures shape (N, 4)
@@ -62,7 +59,7 @@ class DynamicRCNNDataset(Dataset):
         if self.transform is None:
             image = np.array(image)
             image = self.preprocessor.normalize_image(image)
-            image = T.Compose([T.ToImage(), T.ToDtype(torch.float32, scale=True)])
+            image = T.Compose([T.ToImage(), T.ToDtype(torch.float32, scale=True)])(image)
         else:
             image = self.transform(image)
         return image
