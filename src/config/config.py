@@ -22,12 +22,18 @@ class ModelConfig:
     dropout_rate: float = 0.3
     dl_workers: int = 4
     use_wandb: bool = True
+    train_split_ratio: float = 0.8
+    val_test_split_ratio: float = 0.5
+    random_state: int = field(default=None)
 
     # Paths and Logging
     data_path: str = "data/slices_segmentate_png"
     annotation_path: str = "data/annotations.csv"
     log_dir: str = "logs"
     checkpoint_dir: str = "checkpoints"
+    model_checkpoint: str = field(default=None)
+    visualization_dir: str = "visualizations"
+    visualization_experiment_name: str = "bbox_and_gradcam"
     
     def validate(self):
         assert self.experiment_name, "Experiment name must be specified"
