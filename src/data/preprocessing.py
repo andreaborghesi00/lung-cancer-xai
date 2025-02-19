@@ -111,12 +111,28 @@ class ROIPreprocessor():
         
         # remove duplicates
         tomography_ids = list(set(tomography_ids))
+        # sort by pid
+        tomography_ids.sort(key=lambda x: x[1].split('.')[-1]) # this is to ensure reproducibility, as set does not guarantee order, the splitting will be different even if the seed is the same
         
         self.logger.info(f"Loaded {len(tomography_ids)} unique tomography ids out of {tot_ids}")
         
         return tomography_ids
 
-
+    @staticmethod
+    def normalize_background(image: Union[np.ndarray, torch.Tensor]) -> np.ndarray:
+        """
+        Finds the most common pixel value in the image and sets it as the background to 255
+        """
+        
+        if isinstance(image, torch.Tensor):
+            image = image.numpy()
+        
+        background = np.bincount(image.flatten()).argmax()
+        image[image == background] = 255
+        
+        return image
+        
+        
 
     def load_paths_labels(self, tomography_id: Union[Tuple[str, str], List[Tuple[str, str]]]) -> Tuple[List[str], torch.Tensor]:
         """
