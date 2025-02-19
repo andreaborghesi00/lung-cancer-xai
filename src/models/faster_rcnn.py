@@ -4,8 +4,8 @@ from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from torchvision.models.detection.backbone_utils import resnet_fpn_backbone
 from torchvision.models.detection import fasterrcnn_resnet50_fpn_v2, FasterRCNN_ResNet50_FPN_V2_Weights, fasterrcnn_mobilenet_v3_large_fpn, FasterRCNN_MobileNet_V3_Large_FPN_Weights
 from torchvision.models import ResNet18_Weights
-
-
+import logging
+from utils.utils import setup_logging
 class FasterRCNNResnet50B18(nn.Module):
     def __init__(self, num_classes=2): # 2 classes: background and tumor
         super().__init__()
@@ -56,9 +56,15 @@ class FasterRCNNResnet50B18(nn.Module):
 class FasterRCNNMobileNet(nn.Module):
     def __init__(self, num_classes=2):
         super().__init__()
+        self.logger = logging.getLogger(self.__class__.__name__)
+        setup_logging()
+        
         self.weights = FasterRCNN_MobileNet_V3_Large_FPN_Weights.DEFAULT
         self.transforms = FasterRCNN_MobileNet_V3_Large_FPN_Weights.DEFAULT.transforms
         self.model = fasterrcnn_mobilenet_v3_large_fpn(weights=self.weights) # as of now it expects 91 classes (COCO dataset)
+        
+        # print model backbone architecture
+        self.logger.info(self.model.backbone)
         
         # change the number of expected classes
         in_features = self.model.roi_heads.box_predictor.cls_score.in_features
