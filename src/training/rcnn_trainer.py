@@ -2,7 +2,7 @@ import torch
 import logging
 from utils.utils import setup_logging
 from torch.utils.data import DataLoader
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Union
 from torchmetrics.regression import MeanSquaredError
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 import torch.nn as nn
@@ -82,7 +82,7 @@ class RCNNTrainer():
         
     
                     
-    def save_checkpoint(self, epoch: int, metrics: Dict[str, float]):
+    def save_checkpoint(self, epoch: Union[int, str], metrics: Dict[str, float]):
         """
         Save the model checkpoint
         """
@@ -219,4 +219,6 @@ class RCNNTrainer():
             if val_metrics["iou"] > best_val_loss:
                 best_val_loss = val_metrics["iou"]
                 self.save_checkpoint(epoch+1, metrics) # the +1 is just to be consistent with the logs, epochs start at 1
+            # save last model
+            self.save_checkpoint("last", metrics)
                 
