@@ -2,23 +2,23 @@ experiment_name: "dev_roi"
 image_input_channels: 1
 output_dim: 4
 
-dl_workers: 4
+dl_workers: 2
 
-batch_size: 8
-epochs: 20
-learning_rate: 0.0001
+batch_size: 16
+epochs: 100
+learning_rate: 0.001
 dropout_rate: 0.5
-use_wandb: False
-train_split_ratio: 0.8
-val_test_split_ratio: 0.5
+use_wandb: True
+train_split_ratio: 0.7
+val_test_split_ratio: 0.33 # test ratio is 1 - val_test_split_ratio
 random_state: 0
-
+patience: 10
 
 data_path: "data/slices_segmentate_png"
 annotation_path: "data/annotations.csv"
 log_dir: "logs"
 checkpoint_dir: "checkpoints"
-visualization_dir: "visualizations"
+visualization_dir: "visualizations/mobilenet"
 visualization_experiment_name: "bbox_and_gradcam"
 
-model_checkpoint: "checkpoint_epoch_6.pt"
+model_checkpoint: "checkpoint_epoch_3.pt"
