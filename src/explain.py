@@ -3,20 +3,17 @@ import random
 from config.config import get_config
 from data.rcnn_dataset import DynamicRCNNDataset
 import utils.utils as utils
-from models.faster_rcnn import FasterRCNNMobileNet
+from models.faster_rcnn import FasterRCNNMobileNet, FasterRCNNResnet50
 from explainers.grad_cam import CAMExplainer
 from utils.visualization import Visualizer
 from tqdm import tqdm
 import torch
-from torch.utils.data import DataLoader
-from typing import List, Union
-from PIL import Image
-import numpy as np
 from pathlib import Path
 from data.preprocessing import ROIPreprocessor
 from sklearn.model_selection import train_test_split
 import gc
-
+from pytorch_grad_cam import GradCAM, HiResCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM, FullGrad
+import numpy as np
 if __name__ == "__main__":
     config = get_config()
     config.validate()
@@ -28,7 +25,7 @@ if __name__ == "__main__":
     #load model
     model_path = Path(config.checkpoint_dir) / config.model_checkpoint
     logger.info(f"Loading model from checkpoint from {model_path}")
-    model = utils.load_model(model_path, FasterRCNNMobileNet)
+    model = utils.load_model(model_path, FasterRCNNMobileNet, device=device)
     
     # load data
     preprocessor = ROIPreprocessor()
@@ -51,23 +48,23 @@ if __name__ == "__main__":
     logger.info(f"Generating visualizations for {num_samples} random test samples")
     model.eval()
     
-    target_layers = [list(model.model.backbone.body.children())[-1]] # get last layer for RCNN model, unfortunately this is model specific
-    # cam = GradCAM(model=model, target_layers=target_layers)
-    explainer = CAMExplainer(model=model, target_layer=target_layers, target_class=1)
-
+    logger.info(model.model.backbone)
+    inverse_layer_nums = [1]
+    target_layers = [[list(model.model.backbone.body.children())[-(i+1)]] for i in inverse_layer_nums] # get last layer for RCNN model, unfortunately this is model specific
     # apply the explainer to the test samples
+    explainers = [CAMExplainer(model=model, target_layer=target_layer, target_class=1, cam_class=GradCAM) for target_layer in target_layers]
+    logger.info(f"Explainers initialized, length: {len(explainers)}")
     for idx in tqdm(range(num_samples)):
-        # Get sample
         image_path = X_test[idx]
         image, target = test_ds[idx]
         image = image.unsqueeze(0).to(device)
         image.requires_grad = True
         
-        # Get prediction
+        # get prediction to display predicted boxes
         with torch.no_grad():
             prediction = model(image)[0]
         
-        # Filter predictions by confidence
+        # filter predictions by confidence
         confidence_threshold = 0.5
         mask = prediction['scores'] > confidence_threshold
         pred_boxes = prediction['boxes'][mask]
@@ -75,21 +72,23 @@ if __name__ == "__main__":
         
         true_boxes = target['boxes'] # ground truth boxes
         
-        try:
-            grayscale_cam = explainer.explain(image=image, labels=[1], bboxes=[target['boxes'][0].cpu().numpy()])
-        except Exception as e:
-            logger.error(f"Failed to generate CAM for sample {idx}: {e}")
-            continue
-            
         image_numpy = image.detach().squeeze(0).cpu().numpy().transpose(1, 2, 0) # convert to numpy and convert from (C, H, W) to (H, W, C)
-        visualization = explainer.visualize(image=image_numpy, cam=grayscale_cam[0])
-        visualizer.display_bboxes(
-            input=visualization,
-            pred_boxes=pred_boxes,
-            true_boxes=true_boxes,
-            scores=scores,
-            filename=f"sample_{idx}.png"
-        )
+        for layer_idx, target_layer in enumerate(target_layers):
+            explainer = explainers[layer_idx]
+            try:
+                grayscale_cam = explainer.explain(image=image, labels=[1], bboxes=[target['boxes'][0].cpu().numpy()])
+            except Exception as e:
+                logger.error(f"Failed to generate CAM for sample {idx} at layer {layer_idx}: {str(e)}")
+                continue
+                
+            visualization = explainer.visualize(image=image_numpy, cam=grayscale_cam[0])
+            visualizer.display_bboxes(
+                input=visualization,
+                pred_boxes=pred_boxes,
+                true_boxes=true_boxes,
+                scores=scores,
+                filename=f"sample_{idx}_L{layer_idx}.png"
+            )
     
         # with torch.no_grad():
     #     for idx in tqdm(sample_indices):

@@ -25,7 +25,7 @@ class ModelConfig:
     train_split_ratio: float = 0.8
     val_test_split_ratio: float = 0.5
     random_state: int = field(default=None)
-
+    patience: int = 0
     # Paths and Logging
     data_path: str = "data/slices_segmentate_png"
     annotation_path: str = "data/annotations.csv"
@@ -34,6 +34,7 @@ class ModelConfig:
     model_checkpoint: str = field(default=None)
     visualization_dir: str = "visualizations"
     visualization_experiment_name: str = "bbox_and_gradcam"
+    yolo_dataset_dir: str = "data/yolo_dataset"
     
     def validate(self):
         assert self.experiment_name, "Experiment name must be specified"
