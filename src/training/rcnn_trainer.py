@@ -41,14 +41,20 @@ class RCNNTrainer():
         self.train_metrics = self._init_metrics()
         self.val_metrics = self._init_metrics()
         if self.use_wandb:
-            wandb.init(project=self.config.experiment_name)
+            wandb.init(project=self.config.experiment_name,
+                       tags=[self.model.__class__.__name__,
+                             f"{self.config.train_split_ratio} train split",
+                             f"{self.config.val_test_split_ratio} val split",
+                             self.optimizer.__class__.__name__,
+                             self.scheduler.__class__.__name__ if self.scheduler is not None else "No scheduler"])
             wandb.watch(self.model)
-        
-        self.logger.info("Initialized ROITrainer")
+            # dump config to wandb
+            wandb.config.update(self.config.__dict__)
+        self.logger.info("Initialized RCNN Trainer")
     
     def _init_metrics(self) -> Dict[str, Any]:
         return {
-            "iou": MeanAveragePrecision(box_format='xyxy').to(self.device), # default format is xyxy, but annotations come in xywh
+            "mAP@5:95": MeanAveragePrecision(box_format='xyxy').to(self.device), 
             # "mse": MeanSquaredError().to(self.device)
         }
     
@@ -100,7 +106,7 @@ class RCNNTrainer():
         if self.scheduler is not None:
             checkpoint["scheduler_state_dict"] = self.scheduler.state_dict()
         
-        checkpoint_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch}.pt"
+        checkpoint_path = self.checkpoint_dir / self.model.__class__.__name__ / f"checkpoint_epoch_{epoch}.pt"
         torch.save(checkpoint, checkpoint_path)
         self.logger.info(f"Checkpoint saved at {checkpoint_path}")
         
@@ -177,29 +183,30 @@ class RCNNTrainer():
                 targets = self._format_box_for_map(targets)
     
                 try:
-                    self.val_metrics["iou"].update(formatted_preds, targets)
+                    self.val_metrics["mAP@5:95"].update(formatted_preds, targets)
                 except Exception as e:
                     self.logger.error(f"Error updating metrics: {str(e)}")
                     self.logger.debug(f"Predictions shape: {[p['boxes'].shape for p in formatted_preds]}")
                     self.logger.debug(f"Targets shape: {[t['boxes'].shape for t in targets]}")
                     raise
                 
-                pbar.set_postfix({"IoU": self.val_metrics["iou"].compute()['map'].item()})
+                pbar.set_postfix({"mAP@5:95": self.val_metrics["mAP@5:95"].compute()['map'].item()})
         
                 
         metrics = {
-            "iou": self.val_metrics["iou"].compute()['map'].item()
+            "mAP@5:95": self.val_metrics["mAP@5:95"].compute()['map'].item()
         }
         
         return metrics
 
     
-    def train(self, num_epochs: int):
+    def train(self, num_epochs: int, patience: int = 5):
         """
         Training loop
         """
         self.logger.info(f"Training for {num_epochs} epochs")
         best_val_loss = 0.0
+        patience_counter = 0
         
         for epoch in range(num_epochs):
             self.logger.info(f"Epoch {epoch+1}/{num_epochs}")
@@ -208,7 +215,7 @@ class RCNNTrainer():
             val_metrics = self.validation(self.val_loader)
             
             if self.scheduler is not None:
-                self.scheduler.step(val_metrics['iou']) # some schedulers may prefer to be called within the batch loop, but for now we'll call it at the end of the epoch
+                self.scheduler.step(val_metrics['mAP@5:95']) # some schedulers may prefer to be called within the batch loop, but for now we'll call it at the end of the epoch
             
             metrics = {**train_metrics, **val_metrics} # merge the two dictionaries
             self.logger.info(f"Metrics: {metrics}")
@@ -216,9 +223,18 @@ class RCNNTrainer():
             if self.use_wandb:
                 wandb.log(metrics)
             
-            if val_metrics["iou"] > best_val_loss:
-                best_val_loss = val_metrics["iou"]
+            if val_metrics["mAP@5:95"] > best_val_loss:
+                best_val_loss = val_metrics["mAP@5:95"]
                 self.save_checkpoint(epoch+1, metrics) # the +1 is just to be consistent with the logs, epochs start at 1
+                patience_counter = 0
+            else:
+                patience_counter += 1
             # save last model
             self.save_checkpoint("last", metrics)
+            
+            if patience_counter >= patience:
+                self.logger.info(f"Early stopping at epoch {epoch+1}")
+                break
+        wandb.finish()
+        self.logger.info("Training complete")
                 
