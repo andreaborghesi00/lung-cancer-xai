@@ -74,6 +74,31 @@ class ROIPreprocessor():
         return bbox_xyxy
     
     @staticmethod
+    def xywh_to_yolo(bbox: np.ndarray) -> np.ndarray:
+        """
+        Convert bounding box from (x, y, w, h) to (x_center, y_center, w, h) format
+        """
+        bbox_yolo = bbox.copy()
+        bbox_yolo[0] += bbox[2] / 2
+        bbox_yolo[1] += bbox[3] / 2
+        
+        return bbox_yolo
+        
+    @staticmethod
+    def xyxy_to_yolo(bbox: np.ndarray) -> np.ndarray:
+        """
+        Generate bounding box from (x1, y1, x2, y2) to (x_center, y_center, w, h) format
+        """
+        bbox_yolo = bbox.copy()
+        bbox_yolo[0] += (bbox[2] - bbox[0]) / 2
+        bbox_yolo[1] += (bbox[3] - bbox[1]) / 2
+        bbox_yolo[2] = bbox[2] - bbox[0]
+        bbox_yolo[3] = bbox[3] - bbox[1]
+        
+        return bbox_yolo
+    
+    
+    @staticmethod
     def xyxy_to_xywh(bbox: np.ndarray) -> np.ndarray:
         """
         Convert bounding box from (x1, y1, x2, y2) to (x, y, w, h) format
