@@ -7,8 +7,10 @@ import logging
 
 @dataclass(frozen=True)
 class ModelConfig:
-    experiment_name: str
+    project_name: str
     project_dir: str = field(default=os.path.join(Path(__file__).parent.parent.parent), init=False)
+    experiment_name: str = field(default=None)
+    notes: str = field(default=None)
     
     # Model architecture
     image_input_channels: int = 1
@@ -37,7 +39,7 @@ class ModelConfig:
     yolo_dataset_dir: str = "data/yolo_dataset"
     
     def validate(self):
-        assert self.experiment_name, "Experiment name must be specified"
+        assert self.project_name, "Experiment name must be specified"
         assert self.project_dir, "Project directory must be specified"
         
         assert self.image_input_channels > 0, "Image input channels must be greater than 0"
