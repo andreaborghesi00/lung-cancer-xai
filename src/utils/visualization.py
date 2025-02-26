@@ -10,12 +10,15 @@ import logging
 
 
 class Visualizer:
-    def __init__(self):
+    def __init__(self, model_name: str = None):
         self.config = get_config()
         self.logger = logging.getLogger(__name__)
         utils.setup_logging()
         
-        self.visualization_dir = Path(self.config.visualization_dir) / self.config.visualization_experiment_name
+        self.visualization_dir = Path(self.config.visualization_dir)
+        if model_name is not None:
+            self.visualization_dir = self.visualization_dir / model_name
+        self.visualization_dir = self.visualization_dir / self.config.visualization_experiment_name
         self.visualization_dir.mkdir(parents=True, exist_ok=True)
           
           
