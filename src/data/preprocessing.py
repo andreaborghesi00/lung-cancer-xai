@@ -10,8 +10,9 @@ import os
 from pathlib import Path
 import utils.utils as utils
 from torchvision.transforms import v2 as T
+# import torchvision.transforms as T
 import torch
-from multipledispatch import dispatch
+from tqdm import tqdm
 
 @dataclass
 class ROIPreprocessor():
@@ -21,11 +22,21 @@ class ROIPreprocessor():
     def __post_init__(self):
         self.config = get_config()
         self.logger = logging.getLogger(self.__class__.__name__)
-        utils.setup_logging()
+        utils.setup_logging(level=logging.DEBUG)
         if self.transform is None:
             self.logger.warning("No transform provided, only basic conversion to tensor and normalization will be applied")
             # self.transform = T.ToImage() # only convert to tensor
+            
+        try:
+            self.annotation_df = pd.read_csv(self.config.annotation_path)
+        except FileNotFoundError as e:
+            self.logger.error(f"Error loading annotation file at path {self.config.annotation_path}: {str(e)}")
+            raise
         
+        if not all(key in self.annotation_df.columns for key in ["pid", "dcm_series", "uid_slice", "x", "y", "width", "height"]):
+            self.logger.error("Annotation file must contain the following columns: pid, dcm_series, uid_slice, x, y, width, height")
+            raise ValueError("Invalid annotation file")
+    
     def normalize_image(self, image: np.ndarray) -> np.ndarray:
         """
         Normalize the image to have values between 0 and 1
@@ -42,25 +53,6 @@ class ROIPreprocessor():
         norm_bbox[[1, 3]] /= image_size[1]
         
         return norm_bbox
-    
-    def _load_image(self, image_path: str) -> torch.Tensor:
-        """
-        Load an image from the specified path
-        """
-        try:
-            # as rgb
-            image = Image.open(image_path).convert('RGB') # although our ct-scans are 1-channel only, the transforms require 3 channels
-            if self.transform is None:
-                image = np.array(image)
-                image = self.normalize_image(image)
-                image = T.ToTensor()(image)
-            else:
-                image = self.transform(image)
-                
-        except FileNotFoundError as e:
-            raise
-        
-        return image 
     
     @staticmethod
     def xywh_to_xyxy(bbox: np.ndarray) -> np.ndarray:
@@ -114,22 +106,8 @@ class ROIPreprocessor():
         """
         Load the unique couples (pid, dcm_series) from the annotation file
         """
-        
-
-        self.logger.info(f"Loading data from {self.config.annotation_path}")
-        try:
-            annotation_df = pd.read_csv(self.config.annotation_path)
-        except FileNotFoundError as e:
-            self.logger.error(f"Error loading annotation file at path {self.config.annotation_path}: {str(e)}")
-            raise
-        
-        # check keys existence
-        if not all(key in annotation_df.columns for key in ["pid", "dcm_series", "uid_slice", "x", "y", "width", "height"]):
-            self.logger.error("Annotation file must contain the following columns: pid, dcm_series, uid_slice, x, y, width, height")
-            raise ValueError("Invalid annotation file")
-        
         tomography_ids: List[Tuple[str, str]] = []
-        for _, row in annotation_df.iterrows():
+        for _, row in self.annotation_df.iterrows():
             tomography_ids.append((row["pid"], row["dcm_series"]))
         
         tot_ids = len(tomography_ids)
@@ -141,48 +119,55 @@ class ROIPreprocessor():
         
         self.logger.info(f"Loaded {len(tomography_ids)} unique tomography ids out of {tot_ids}")
         
-        return tomography_ids
+        # filter out the tomographies that correspond to a non-existing slice path
+        available_slices = [os.path.splitext(f)[0] for f in os.listdir(self.config.data_path)]
+        self.logger.debug(f"File format that i am looking for: {available_slices[0]}")
+        
+        valid_tomography_ids = []
+        
+        for pid, dcm_series in tomography_ids:
+            for _, row in self.annotation_df[(self.annotation_df["pid"] == pid) & (self.annotation_df["dcm_series"] == dcm_series)].iterrows():
+                if row["uid_slice"] in available_slices:
+                    valid_tomography_ids.append((pid, dcm_series))
+                    break
+        
+        self.logger.info(f"Found {len(valid_tomography_ids)} valid tomography ids out of {len(tomography_ids)}")
+        
+        return valid_tomography_ids
 
     @staticmethod
-    def normalize_background(image: Union[np.ndarray, torch.Tensor]) -> np.ndarray:
+    def normalize_background(image: Union[np.ndarray, torch.Tensor], new_bg_value: int = 255) -> Union[np.ndarray, torch.Tensor]:
         """
         Finds the most common pixel value in the image and sets it as the background to 255
         """
+        if new_bg_value < 0 or new_bg_value > 255:
+            raise ValueError("New value must be between 0 and 255")
         
         if isinstance(image, torch.Tensor):
-            image = image.numpy()
+            background = torch.bincount(image.flatten().long()).argmax()
+            image[image == background] = new_bg_value
+            return image
+        elif isinstance(image, np.ndarray):    
+            background = np.bincount(image.flatten()).argmax()
+            image[image == background] = new_bg_value
+            return image
         
-        background = np.bincount(image.flatten()).argmax()
-        image[image == background] = 255
+        raise ValueError("Input must be a numpy array or a torch tensor")
         
-        return image
-        
-        
-
     def load_paths_labels(self, tomography_id: Union[Tuple[str, str], List[Tuple[str, str]]]) -> Tuple[List[str], torch.Tensor]:
         """
-        Load slice paths and bboxes of the specified tomography id
+        Load slice paths and bboxes (xyxy format) of the specified tomography id (pid, dcm_series)
         """
-        try:
-            annotation_df = pd.read_csv(self.config.annotation_path)
-        except FileNotFoundError as e:
-            self.logger.error(f"Error loading annotation file at path {self.config.annotation_path}: {str(e)}")
-            raise
-        
-        if not all(key in annotation_df.columns for key in ["pid", "dcm_series", "uid_slice", "x", "y", "width", "height"]):
-            self.logger.error("Annotation file must contain the following columns: pid, dcm_series, uid_slice, x, y, width, height")
-            raise ValueError("Invalid annotation file")
-        
         if isinstance(tomography_id, tuple):
             tomography_id = [tomography_id]
         
         image_paths = []
         bboxes = []
         missed_paths = 0
-        
         for pid, dcm_series in tomography_id:
-            for _, row in annotation_df[(annotation_df["pid"] == pid) & (annotation_df["dcm_series"] == dcm_series)].iterrows():
+            for _, row in self.annotation_df[(self.annotation_df["pid"] == pid) & (self.annotation_df["dcm_series"] == dcm_series)].iterrows():
                 image_path = os.path.join(self.config.data_path, row["uid_slice"] + '.png')
+                self.logger.debug(f"Loading image at path {image_path}")
                 if not Path(image_path).exists():
                     missed_paths += 1
                     continue
