@@ -8,6 +8,7 @@ from PIL import Image
 from data.preprocessing import ROIPreprocessor
 import numpy as np
 from torchvision.transforms import v2 as T
+# import torchvision.transforms as T
 
 class StaticRCNNDataset(Dataset):
     def __init__(self, images: torch.Tensor, boxes: torch.Tensor, transform: Optional[Callable] = None):

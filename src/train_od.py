@@ -5,24 +5,33 @@ import torch
 from sklearn.model_selection import train_test_split
 from data.preprocessing import ROIPreprocessor
 from data.rcnn_dataset import StaticRCNNDataset, DynamicRCNNDataset
+from data.tomography_dataset import DynamicTomographyDataset
 import models.faster_rcnn as frcnn
 from training.rcnn_trainer import RCNNTrainer
 import gc
-from pytorch_grad_cam.utils.image import show_cam_on_image
+import torch.nn.parallel
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 if __name__ == "__main__":
     config = get_config()
     config.validate()
     logger = logging.getLogger(__name__)
     utils.setup_logging(level=logging.INFO)
-    device = "cuda" if torch.cuda.is_available() else "cpu"    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")    
     
     # model 
     logger.info("Initializing model")
     model = frcnn.FasterRCNNMobileNet()
     logger.info(f"Model initialized {model.__class__.__name__} with {utils.count_parameters(model)} trainable parameters")
-    model = model.to(device) # maybe this will keep it off the ram
-    logger.info(model.model)
+    
+    
+    if torch.cuda.device_count() > 1:
+        logger.info(f"Using {torch.cuda.device_count()} GPUs for training")
+        model = torch.nn.DataParallel(model, [0, 1])  # Multi-GPU support
+
+    model = model.to(device)
+    logger.debug(model.module if isinstance(model, torch.nn.DataParallel) else model)
+    
     
     # prepare data
     preprocessor = ROIPreprocessor()
@@ -42,12 +51,14 @@ if __name__ == "__main__":
     
     # datasets and dataloaders
     logger.info("Creating datasets and dataloaders")
-    train_ds = DynamicRCNNDataset(X_train, y_train, transform=model.get_transform())
-    val_ds = DynamicRCNNDataset(X_val, y_val, transform=model.get_transform())
+    transform = model.module.get_transform() if isinstance(model, torch.nn.DataParallel) else model.get_transform()
+    train_ds = DynamicRCNNDataset(X_train, y_train, transform=transform)
+    # val_ds = DynamicRCNNDataset(X_val, y_val, transform=transform)
+    val_ds = DynamicTomographyDataset(val_ids, transform=transform)
     
     logger.info("Creating dataloaders")
-    train_dl = train_ds.get_loader(shuffle=True)
-    val_dl = val_ds.get_loader()
+    train_dl = train_ds.get_loader(shuffle=True, batch_size=config.batch_size * torch.cuda.device_count())
+    val_dl = val_ds.get_loader(batch_size = 1) # this loader gets whole tomographies, hence the smaller batch size
   
     # free memory
     del X_train, X_val, y_train, y_val, train_ds, val_ds, unique_tomographies, train_ids, val_ids
@@ -56,7 +67,7 @@ if __name__ == "__main__":
     # optimizer and scheduler
     logger.info("Initializing optimizer and scheduler")
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=4) # max since we are maximizing iou
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=6, T_mult=2) # max since we are maximizing iou
     
     # training
     logger.info("Initializing trainer")

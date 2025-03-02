@@ -45,7 +45,7 @@ class DynamicTomographyDataset(Dataset):
             image = self._load_image(path)
             slices.append(image)
         
-        slices = torch.stack(slices).squeeze(1)
+        slices = torch.stack(slices)
         self.logger.debug(f"Loaded slices with shape {slices.shape}")
         self.logger.debug(f"Loaded boxes with shape {boxes.shape}")
         return slices, boxes
@@ -69,6 +69,14 @@ class DynamicTomographyDataset(Dataset):
         else:
             raise ValueError(f"Invalid compression type {compression_type}")        
         
+    def get_loader(self, shuffle: bool = False, num_workers: int = None, batch_size: int = None):
+        return DataLoader(
+            self,
+            batch_size=self.config.batch_size if batch_size is None else batch_size,
+            shuffle=shuffle,
+            num_workers=self.config.dl_workers if num_workers is None else num_workers,
+            collate_fn=lambda x: tuple(zip(*x)) # custom collate function to handle the target dictionary
+        )
 
     def __len__(self):
         return len(self.tomography_ids)
@@ -77,7 +85,11 @@ class DynamicTomographyDataset(Dataset):
     def __getitem__(self, idx):
         slices, boxes = self._load_slices_and_boxes(self.tomography_ids[idx])
         boxes = self._compress_labels(boxes)
-        return slices, boxes
+        target = {
+            "boxes": boxes.view(-1, 4), # ensures shape (N, 4)
+            "labels": torch.ones(len(boxes), dtype=torch.int64) # all boxes are tumors
+        }
+        return slices, target
 
 # for testing purposes only
 if __name__ == "__main__":
