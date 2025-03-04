@@ -22,7 +22,7 @@ class ROIPreprocessor():
     def __post_init__(self):
         self.config = get_config()
         self.logger = logging.getLogger(self.__class__.__name__)
-        utils.setup_logging(level=logging.DEBUG)
+        utils.setup_logging(level=logging.INFO)
         if self.transform is None:
             self.logger.warning("No transform provided, only basic conversion to tensor and normalization will be applied")
             # self.transform = T.ToImage() # only convert to tensor
@@ -117,7 +117,7 @@ class ROIPreprocessor():
         # sort by pid
         tomography_ids.sort(key=lambda x: x[1].split('.')[-1]) # this is to ensure reproducibility, as set does not guarantee order, the splitting will be different even if the seed is the same
         
-        self.logger.info(f"Loaded {len(tomography_ids)} unique tomography ids out of {tot_ids}")
+        self.logger.debug(f"Loaded {len(tomography_ids)} unique tomography ids out of {tot_ids}")
         
         # filter out the tomographies that correspond to a non-existing slice path
         available_slices = [os.path.splitext(f)[0] for f in os.listdir(self.config.data_path)]
@@ -131,7 +131,7 @@ class ROIPreprocessor():
                     valid_tomography_ids.append((pid, dcm_series))
                     break
         
-        self.logger.info(f"Found {len(valid_tomography_ids)} valid tomography ids out of {len(tomography_ids)}")
+        self.logger.debug(f"Found {len(valid_tomography_ids)} valid tomography ids out of {len(tomography_ids)}")
         
         return valid_tomography_ids
 
@@ -181,8 +181,8 @@ class ROIPreprocessor():
             self.logger.error("No images loaded, check the data path and annotation file")
             raise ValueError("No images loaded")
 
-        self.logger.info(f"Loaded {len(image_paths)} images, missed {missed_paths}")
-        self.logger.info(f"Data shape: {len(image_paths)}, Labels shape: {len(bboxes)}")
+        self.logger.debug(f"Loaded {len(image_paths)} images, missed {missed_paths}")
+        self.logger.debug(f"Data shape: {len(image_paths)}, Labels shape: {len(bboxes)}")
         
         bbox_tensor = torch.stack(bboxes)
         return np.array(image_paths), bbox_tensor
