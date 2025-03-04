@@ -2,7 +2,7 @@ import torch
 import logging
 from utils.utils import setup_logging
 from torch.utils.data import DataLoader
-from typing import Dict, Optional, Any, List, Union
+from typing import Dict, Optional, Any, List, Union, Tuple
 from torchmetrics.regression import MeanSquaredError
 from torchmetrics.detection.mean_ap import MeanAveragePrecision
 import torch.nn as nn
@@ -16,9 +16,7 @@ import numpy as np
 class RCNNTrainer():
     def __init__(self,
                  model: nn.Module, 
-                 optimizer: optim.Optimizer, 
-                 train_loader: DataLoader, 
-                 val_loader: DataLoader, 
+                 optimizer: optim.Optimizer = None,
                  scheduler: Optional[optim.lr_scheduler._LRScheduler] = None, 
                  device: str = "cuda" if torch.cuda.is_available() else "cpu",
                  checkpoint_dir: Optional[str] = None,
@@ -26,15 +24,17 @@ class RCNNTrainer():
                  ):
             
         self.logger = logging.getLogger(self.__class__.__name__)
-        setup_logging()
+        setup_logging(level=logging.INFO)
         self.config = get_config()
                         
         self.device = device
-        self.model = model.to(self.device)
+
+        self.model = model
+        if isinstance(self.model, torch.nn.DataParallel):
+            self.model = self.model.module  # Unwrap model for correct access
+        self.model.to(device)
         self.optimizer = optimizer
         self.scheduler = scheduler
-        self.train_loader = train_loader
-        self.val_loader = val_loader
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir else None
         self.use_wandb = use_wandb # wandb logging only during training
         
@@ -57,7 +57,7 @@ class RCNNTrainer():
     
     def _init_metrics(self) -> Dict[str, Any]:
         return {
-            "mAP@5:95": MeanAveragePrecision(box_format='xyxy').to(self.device), 
+            "mAP@5:95": MeanAveragePrecision(iou_thresholds=np.arange(0.05, 1.0, 0.05).tolist()).to(self.device), 
             "mAP@50": MeanAveragePrecision(iou_thresholds=[0.5], box_format='xyxy').to(self.device),
             "mAP@75": MeanAveragePrecision(iou_thresholds=[0.75], box_format='xyxy').to(self.device),
             "mAP@50:95": MeanAveragePrecision(iou_thresholds=np.arange(0.5, 1.0, 0.05).tolist(), box_format='xyxy').to(self.device),
@@ -68,27 +68,27 @@ class RCNNTrainer():
         for metric in metrics.values():
             metric.reset()
     
-    def _format_box_for_map(self, boxes: List[Dict[str, torch.Tensor]], is_prediction: bool = False) -> List[Dict[str, torch.Tensor]]:
+    def _format_box_for_map(self, preds: List[Dict[str, torch.Tensor]], is_prediction: bool = False) -> List[Dict[str, torch.Tensor]]:
         """
         Format the bounding boxes for the MeanAveragePrecision metric (torchmetrics)
         """
         
-        formatted_boxes = []
-        for box_dict in boxes:
+        formatted_preds = []
+        for pred_dict in preds:
             formatted_dict = {
-                "boxes": box_dict["boxes"].to(torch.float32)
+                "boxes": pred_dict["boxes"].to(torch.float32)
             }
             
             if is_prediction: # one-liners are useful only if they do not hinder readability
-                formatted_dict["scores"] = box_dict["scores"].to(torch.float32)
-                formatted_dict["labels"] = box_dict["labels"].to(torch.int64)
+                formatted_dict["scores"] = pred_dict["scores"].to(torch.float32)
+                formatted_dict["labels"] = pred_dict["labels"].to(torch.int64)
             else:
-                formatted_dict["scores"] = torch.ones(len(box_dict["boxes"]), dtype=torch.float32).to(self.device)
-                formatted_dict["labels"] = torch.ones(len(box_dict["boxes"]), dtype=torch.int64).to(self.device)
+                formatted_dict["scores"] = torch.ones(len(pred_dict["boxes"]), dtype=torch.float32).to(self.device)
+                formatted_dict["labels"] = torch.ones(len(pred_dict["boxes"]), dtype=torch.int64).to(self.device)
             
-            formatted_boxes.append(formatted_dict)
+            formatted_preds.append(formatted_dict)
             
-        return formatted_boxes
+        return formatted_preds
     
     # def _format_rcnn_output_for_map(self, output: List[torch.Tensor], targets: List[Dict[str, torch.Tensor]]) -> List[Dict[str, torch.Tensor]]:
         
@@ -204,9 +204,147 @@ class RCNNTrainer():
         metrics = {k: v.compute()['map'].item() for k, v in self.val_metrics.items()}
         
         return metrics
+    
+    def tomography_aware_validation(self, dl: DataLoader) -> Dict[str, float]:
+        """
+        Validation loop using a tomography-aware approach, we'll use a different loader that returns the whole
+        tomography and a single bbox which is usually the mean of all the bounding boxes in the tomography.
+        We want to evaluate the model on the whole tomography, and the predictions should be adjusted before
+        computing the validation metrics. 
+        """
+        self.model.eval()
+        self._reset_metrics(self.val_metrics)
+        pbar = tqdm(dl, desc="Validation Tomography Aware")
+        
+        with torch.no_grad():
+            for tomographies, targets in pbar:
+                
+                # tomographies is a tuble of len batch size, each element is a tensor of shape D, C, H, W, unravel it in a tensor of shape B, D, C, H, W
+                tomographies = torch.stack(tomographies)
+                tomographies = tomographies.to(self.device)
+                
+                targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
+                
+                # cycle through the depth dimension and get the predictions
+                for batch_idx in range(tomographies.shape[0]):
+                    tomography = tomographies[batch_idx, ...] # D, C, H, W
+                    target = targets[batch_idx]
+                    box_scores = []
+                    for slice_idx in range(tomography.shape[0]):
+                        image = tomography[slice_idx, ...]  # C, H, W 
+                        image = image.unsqueeze(0) # 1, C, H, W add batch dimension
+                        preds = self.model(image)
+
+                        preds = self._format_box_for_map(preds, is_prediction=True)[0] # only one prediction since we are using a single slice
+                        # list of (box, score) tuples
+                        box_scores.extend([(preds["boxes"][i], preds["scores"][i]) for i in range(len(preds['boxes']))])
+
+                    if box_scores is not None and len(box_scores) > 0:
+                        # remove outlier bboxes from prediction
+                        box_scores.sort(key=lambda x: x[1], reverse=True) # sort by score in descending order
+                        boxes = self._remove_outliers([box for box, _ in box_scores]) # pass only the sorted boxes
+                        
+                        # get the mean bbox
+                        mean_bbox = self._get_mean_bbox(boxes)
+                        formatted_mean_bbox = {
+                            "boxes": mean_bbox.view(1, 4),
+                            "labels": torch.ones(1, dtype=torch.int64).to(self.device),
+                            "scores": torch.ones(1, dtype=torch.float32).to(self.device)
+                        }
+                        self.logger.debug(f"preds lengths: boxes ({len(formatted_mean_bbox['boxes'])}), labels ({len(formatted_mean_bbox['labels'])}), scores ({len(formatted_mean_bbox['scores'])})")
+                                            
+                    else:
+                        formatted_mean_bbox = self._empty_prediction()
+                        
+                    formatted_target = {
+                        "boxes": target["boxes"].view(-1, 4),
+                        # "scores": torch.ones(target["boxes"].shape[0], dtype=torch.float32).to(self.device),
+                        "labels": torch.ones(target["boxes"].shape[0], dtype=torch.int64).to(self.device)
+                    }
+                    self.logger.debug(f"target lengths: boxes ({len(formatted_target['boxes'])}), labels ({len(formatted_target['labels'])})")
+   
+
+                    # update the metrics
+                    try:
+                        for keys in self.val_metrics.keys():
+                            for _ in range(tomography.shape[0]): # we need to update the metrics for each slice to be comparable with the other validation loop
+                                self.val_metrics[keys].update([formatted_mean_bbox], [formatted_target])
+                    except Exception as e:
+                        self.logger.error(f"Error updating metrics: {str(e)}")
+                        self.logger.debug(f"Predictions shape: {[p['boxes'].shape for p in preds]}")
+                        self.logger.debug(f"Targets shape: {[t['boxes'].shape for t in targets]}")
+                        raise
+                    
+                pbar.set_postfix({"mAP@5:95": self.val_metrics["mAP@5:95"].compute()['map'].item()})
+
+        metrics = {k: v.compute()['map'].item() for k, v in self.val_metrics.items()}
+        return metrics
 
     
-    def train(self, num_epochs: int, patience: int = 5):
+    def _empty_prediction(self) -> Dict[str, torch.Tensor]:
+        return {
+            "boxes": torch.empty((0, 4), dtype=torch.float32).to(self.device),
+            "labels": torch.empty(0, dtype=torch.int64).to(self.device),
+            "scores": torch.empty(0, dtype=torch.float32).to(self.device)
+        }
+        
+        
+    def _remove_outliers(self, boxes: List[torch.Tensor], threshold: float = 0.1) -> List[torch.Tensor]:
+        """
+        Given a list of boxes, remove the outlying boxes based on the distribution of the boxes.
+        given the IQR, we can remove the boxes that are outside the 1.5 * IQR range from the median for each dimension      
+        """
+        if len(boxes) == 0:
+            return boxes
+        
+        original_count = len(boxes)
+        boxes = torch.stack(boxes)
+        kept_boxes = []
+        multipliers = [1.5, 2.0, 2.5, 3.0]  # progressively less aggressive filtering
+        
+        for multiplier in multipliers:
+            q1 = torch.quantile(boxes, 0.25, dim=0)
+            q3 = torch.quantile(boxes, 0.75, dim=0)
+            iqr = q3 - q1
+            lower_bound = q1 - multiplier * iqr
+            upper_bound = q3 + multiplier * iqr
+            
+            kept_boxes = []
+            for box in boxes:
+                if torch.all(box > lower_bound) and torch.all(box < upper_bound):
+                    kept_boxes.append(box)
+            
+            # if we have a reasonable number of boxes, stop
+            if len(kept_boxes) > 0 and len(kept_boxes) >= min(2, original_count * 0.3):
+                self.logger.debug(f"Used IQR multiplier {multiplier}: kept {len(kept_boxes)}/{original_count} boxes")
+                break
+        
+        if len(kept_boxes) == 0 and original_count > 0:
+            self.logger.warning("All boxes were filtered out as outliers, using top confidence boxes instead")
+            # Fall back to using the top N most confident boxes
+            # Sort boxes by confidence if available, otherwise use the first few
+            return [boxes[0]] # return the first box, which should also be the most confident    
+        return kept_boxes
+    
+    
+    def _get_mean_bbox(self, boxes: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Given a list of bboxes, it returns a single bbox that is the mean of all bboxes
+        """ 
+        if len(boxes) == 0:
+            return boxes
+        
+        boxes = torch.stack(boxes)
+        mean_bbox = torch.mean(boxes, dim=0)
+        
+        if mean_bbox.shape != torch.Size([4]):
+            self.logger.warning(f"Mean bbox has unexpected shape: {mean_bbox.shape}, reshaping to [4]")
+            mean_bbox = mean_bbox.view(4)
+        
+        return mean_bbox
+        
+        
+    def train(self, train_loader, val_loader, num_epochs: int, patience: int = 5):
         """
         Training loop
         """
@@ -217,8 +355,8 @@ class RCNNTrainer():
         for epoch in range(num_epochs):
             self.logger.info(f"Epoch {epoch+1}/{num_epochs}")
             
-            train_metrics = self.train_epoch(self.train_loader) 
-            val_metrics = self.validation(self.val_loader)
+            train_metrics = self.train_epoch(train_loader) 
+            val_metrics = self.validation(val_loader)
             
             if self.scheduler is not None:
                 # self.scheduler.step(val_metrics['mAP@5:95']) # some schedulers may prefer to be called within the batch loop, but for now we'll call it at the end of the epoch
