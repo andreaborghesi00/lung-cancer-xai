@@ -10,3 +10,4 @@ src/notebooks/scrap.ipynb
 *.pt
 dev_roi/*
 yolo_models/*
+*.ipynb
