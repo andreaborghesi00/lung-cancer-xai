@@ -54,13 +54,14 @@ if __name__ == "__main__":
                             use_wandb=config.use_wandb
                           )
     
+    logger.info("Testing model - Tomography aware")
+    metrics = trainer.validation_outlier_detection(test_dl_tomo)
+    logger.info(f"Test metrics: {metrics}")
+    
     logger.info("Testing model - Non tomography aware")
     metrics = trainer.validation(test_dl)
     logger.info(f"Test metrics: {metrics}")
     
-    logger.info("Testing model - Tomography aware")
-    metrics = trainer.tomography_aware_validation(test_dl_tomo)
-    logger.info(f"Test metrics: {metrics}")
     
     # visualizer = Visualizer()    
 

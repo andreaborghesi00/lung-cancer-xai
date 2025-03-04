@@ -59,7 +59,13 @@ class FasterRCNNMobileNet(nn.Module):
         
         self.weights = FasterRCNN_MobileNet_V3_Large_FPN_Weights.DEFAULT
         self.transforms = FasterRCNN_MobileNet_V3_Large_FPN_Weights.DEFAULT.transforms()
-        self.model = fasterrcnn_mobilenet_v3_large_fpn(weights=self.weights) # as of now it expects 91 classes (COCO dataset)
+        self.model = fasterrcnn_mobilenet_v3_large_fpn(
+            weights=self.weights,
+            box_score_thresh=0.005,  # Lower confidence threshold (default is usually 0.05)
+            box_nms_thresh=0.3,     # NMS threshold
+            box_detections_per_img=500, # Increased max detections per image
+            
+        )  # as of now it expects 91 classes (COCO dataset)
         
         # print model backbone architecture
         # self.logger.info(self.model.backbone)

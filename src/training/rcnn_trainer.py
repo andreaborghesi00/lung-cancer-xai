@@ -24,7 +24,7 @@ class RCNNTrainer():
                  ):
             
         self.logger = logging.getLogger(self.__class__.__name__)
-        setup_logging(level=logging.INFO)
+        setup_logging(level=logging.DEBUG)
         self.config = get_config()
                         
         self.device = device
@@ -204,83 +204,72 @@ class RCNNTrainer():
         metrics = {k: v.compute()['map'].item() for k, v in self.val_metrics.items()}
         
         return metrics
+
     
-    def tomography_aware_validation(self, dl: DataLoader) -> Dict[str, float]:
-        """
-        Validation loop using a tomography-aware approach, we'll use a different loader that returns the whole
-        tomography and a single bbox which is usually the mean of all the bounding boxes in the tomography.
-        We want to evaluate the model on the whole tomography, and the predictions should be adjusted before
-        computing the validation metrics. 
-        """
+    def validation_outlier_detection(self, dl: DataLoader) -> Dict[str, float]:
         self.model.eval()
         self._reset_metrics(self.val_metrics)
         pbar = tqdm(dl, desc="Validation Tomography Aware")
         
         with torch.no_grad():
-            for tomographies, targets in pbar:
+            for tomographies, targets in pbar: # batch
+                tomographies = torch.stack(tomographies) # B, D, C, H, W, although it would be necessary to do tomographies[0] since it is for some reason wrapped into a tuple, we would lose the B dimension, this is a way to both unwrap it and add the B dimension
+                tomographies = tomographies.to(torch.device("cuda:0"))
+                targets = targets[0]
+                targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets] 
                 
-                # tomographies is a tuble of len batch size, each element is a tensor of shape D, C, H, W, unravel it in a tensor of shape B, D, C, H, W
-                tomographies = torch.stack(tomographies)
-                tomographies = tomographies.to(self.device)
-                
-                targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
-                
-                # cycle through the depth dimension and get the predictions
-                for batch_idx in range(tomographies.shape[0]):
-                    tomography = tomographies[batch_idx, ...] # D, C, H, W
-                    target = targets[batch_idx]
+                for batch_idx in range(tomographies.shape[0]): # tomography
+                    tomography = tomographies[batch_idx, ...]
                     box_scores = []
-                    for slice_idx in range(tomography.shape[0]):
-                        image = tomography[slice_idx, ...]  # C, H, W 
-                        image = image.unsqueeze(0) # 1, C, H, W add batch dimension
+                    preds_list = []
+                    for slice_idx in range(tomography.shape[0]): # slice
+                        image = tomography[slice_idx, ...]
+                        image = image.unsqueeze(0)
                         preds = self.model(image)
-
-                        preds = self._format_box_for_map(preds, is_prediction=True)[0] # only one prediction since we are using a single slice
+                        
+                        preds = self._format_box_for_map(preds, is_prediction=True) # only one prediction since we are using a single slice
+                        preds_list.append(preds)
                         # list of (box, score) tuples
-                        box_scores.extend([(preds["boxes"][i], preds["scores"][i]) for i in range(len(preds['boxes']))])
-
+                        box_scores.extend([(preds[0]["boxes"][i], preds[0]["scores"][i]) for i in range(len(preds[0]['boxes']))])
+                        
                     if box_scores is not None and len(box_scores) > 0:
                         # remove outlier bboxes from prediction
-                        box_scores.sort(key=lambda x: x[1], reverse=True) # sort by score in descending order
-                        boxes = self._remove_outliers([box for box, _ in box_scores]) # pass only the sorted boxes
+                        box_scores.sort(key=lambda x: x[1], reverse=True)
+                        keep, skip = self._remove_outliers([box for box, _ in box_scores])
                         
                         # get the mean bbox
-                        mean_bbox = self._get_mean_bbox(boxes)
+                        mean_bbox = self._get_mean_bbox([box_score[0] for i, box_score in enumerate(box_scores) if i in keep])
                         formatted_mean_bbox = {
                             "boxes": mean_bbox.view(1, 4),
                             "labels": torch.ones(1, dtype=torch.int64).to(self.device),
                             "scores": torch.ones(1, dtype=torch.float32).to(self.device)
                         }
-                        self.logger.debug(f"preds lengths: boxes ({len(formatted_mean_bbox['boxes'])}), labels ({len(formatted_mean_bbox['labels'])}), scores ({len(formatted_mean_bbox['scores'])})")
-                                            
                     else:
                         formatted_mean_bbox = self._empty_prediction()
-                        
-                    formatted_target = {
-                        "boxes": target["boxes"].view(-1, 4),
-                        # "scores": torch.ones(target["boxes"].shape[0], dtype=torch.float32).to(self.device),
-                        "labels": torch.ones(target["boxes"].shape[0], dtype=torch.int64).to(self.device)
-                    }
-                    self.logger.debug(f"target lengths: boxes ({len(formatted_target['boxes'])}), labels ({len(formatted_target['labels'])})")
-   
-
+                    
+                    targets = [self._format_box_for_map([t], is_prediction=False) for t in targets]
+                    
                     # update the metrics
                     try:
                         for keys in self.val_metrics.keys():
-                            for _ in range(tomography.shape[0]): # we need to update the metrics for each slice to be comparable with the other validation loop
-                                self.val_metrics[keys].update([formatted_mean_bbox], [formatted_target])
+                            for i in range(tomography.shape[0]): # we need to update the metrics for each slice to be comparable with the other validation loop
+                                if i in skip:
+                                    self.val_metrics[keys].update([formatted_mean_bbox], targets[i])
+                                else:
+                                    self.val_metrics[keys].update(preds_list[i], targets[i])
                     except Exception as e:
                         self.logger.error(f"Error updating metrics: {str(e)}")
-                        self.logger.debug(f"Predictions shape: {[p['boxes'].shape for p in preds]}")
-                        self.logger.debug(f"Targets shape: {[t['boxes'].shape for t in targets]}")
+                        self.logger.info(f"Predictions shape: {[p['boxes'].shape for p in preds]}")
+                        self.logger.info(f"Targets shape: {[t['boxes'].shape for t in targets]}")
                         raise
                     
                 pbar.set_postfix({"mAP@5:95": self.val_metrics["mAP@5:95"].compute()['map'].item()})
-
+                
         metrics = {k: v.compute()['map'].item() for k, v in self.val_metrics.items()}
         return metrics
-
-    
+                                            
+                        
+        
     def _empty_prediction(self) -> Dict[str, torch.Tensor]:
         return {
             "boxes": torch.empty((0, 4), dtype=torch.float32).to(self.device),
@@ -289,17 +278,20 @@ class RCNNTrainer():
         }
         
         
-    def _remove_outliers(self, boxes: List[torch.Tensor], threshold: float = 0.1) -> List[torch.Tensor]:
+    def _remove_outliers(self, boxes: List[torch.Tensor], threshold: float = 0.1) -> Tuple[List[int], List[int]]:
         """
         Given a list of boxes, remove the outlying boxes based on the distribution of the boxes.
         given the IQR, we can remove the boxes that are outside the 1.5 * IQR range from the median for each dimension      
+        
+        returns the list of indices of the kept boxes and the removed boxes
         """
         if len(boxes) == 0:
             return boxes
         
         original_count = len(boxes)
         boxes = torch.stack(boxes)
-        kept_boxes = []
+        kept_boxes_idx = []
+        removed_boxes_idx = []
         multipliers = [1.5, 2.0, 2.5, 3.0]  # progressively less aggressive filtering
         
         for multiplier in multipliers:
@@ -309,22 +301,26 @@ class RCNNTrainer():
             lower_bound = q1 - multiplier * iqr
             upper_bound = q3 + multiplier * iqr
             
-            kept_boxes = []
-            for box in boxes:
-                if torch.all(box > lower_bound) and torch.all(box < upper_bound):
-                    kept_boxes.append(box)
+            kept_boxes_idx = []
+            removed_boxes_idx = []
+            for i in range(len(boxes)):
+                if torch.all(boxes[i] > lower_bound) and torch.all(boxes[i] < upper_bound):
+                    kept_boxes_idx.append(i)
+                else:
+                    removed_boxes_idx.append(i)
             
             # if we have a reasonable number of boxes, stop
-            if len(kept_boxes) > 0 and len(kept_boxes) >= min(2, original_count * 0.3):
-                self.logger.debug(f"Used IQR multiplier {multiplier}: kept {len(kept_boxes)}/{original_count} boxes")
+            if len(kept_boxes_idx) > 0 and len(kept_boxes_idx) >= min(2, original_count * 0.3):
+                self.logger.debug(f"Used IQR multiplier {multiplier}: kept {len(kept_boxes_idx)}/{original_count} boxes")
                 break
         
-        if len(kept_boxes) == 0 and original_count > 0:
+        if len(kept_boxes_idx) == 0 and original_count > 0:
             self.logger.warning("All boxes were filtered out as outliers, using top confidence boxes instead")
+            self.logger.warning(f"Original count: {original_count}")
             # Fall back to using the top N most confident boxes
             # Sort boxes by confidence if available, otherwise use the first few
-            return [boxes[0]] # return the first box, which should also be the most confident    
-        return kept_boxes
+            return [0], np.arange(1, len(boxes))
+        return kept_boxes_idx, removed_boxes_idx
     
     
     def _get_mean_bbox(self, boxes: List[torch.Tensor]) -> torch.Tensor:
