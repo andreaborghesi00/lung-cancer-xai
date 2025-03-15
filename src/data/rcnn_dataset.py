@@ -5,7 +5,7 @@ from utils.utils import setup_logging
 from config.config import get_config
 from typing import Optional, Callable, List
 from PIL import Image
-from data.preprocessing import ROIPreprocessor
+from data.rcnn_preprocessing import ROIPreprocessor
 import numpy as np
 from torchvision.transforms import v2 as T
 # import torchvision.transforms as T
@@ -43,7 +43,7 @@ class StaticRCNNDataset(Dataset):
         )
         
 class DynamicRCNNDataset(Dataset):
-    def __init__(self, image_paths: List[str], boxes: torch.Tensor, transform: Optional[Callable] = None):
+    def __init__(self, image_paths: List[str], boxes: torch.Tensor, transform: Optional[Callable] = None, augment: bool = True):
         self.config = get_config()
         
         self.image_paths = image_paths

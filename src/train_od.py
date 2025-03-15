@@ -3,7 +3,7 @@ import utils.utils as utils
 from config.config import get_config
 import torch
 from sklearn.model_selection import train_test_split
-from data.preprocessing import ROIPreprocessor
+from data.rcnn_preprocessing import ROIPreprocessor
 from data.rcnn_dataset import StaticRCNNDataset, DynamicRCNNDataset
 from data.tomography_dataset import DynamicTomographyDataset
 import models.faster_rcnn as frcnn
@@ -17,7 +17,7 @@ if __name__ == "__main__":
     config.validate()
     logger = logging.getLogger(__name__)
     utils.setup_logging(level=logging.INFO)
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")    
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")    
     
     # model 
     logger.info("Initializing model")
@@ -31,7 +31,6 @@ if __name__ == "__main__":
 
     model = model.to(device)
     logger.debug(model.module if isinstance(model, torch.nn.DataParallel) else model)
-    
     
     # prepare data
     preprocessor = ROIPreprocessor()
