@@ -11,11 +11,15 @@ from utils.visualization import Visualizer
 from tqdm import tqdm
 import torch
 from pathlib import Path
-from data.preprocessing import ROIPreprocessor
+from data.rcnn_preprocessing import ROIPreprocessor
 from sklearn.model_selection import train_test_split
 import gc
 from pytorch_grad_cam import GradCAM, HiResCAM, ScoreCAM, GradCAMPlusPlus, AblationCAM, XGradCAM, EigenCAM, FullGrad
 import numpy as np
+
+def _get_image_from_tomo(tomo, idx):
+    image = tomo[idx].squeeze(0).cpu().numpy().transpose(1, 2, 0)
+    return image
 
 if __name__ == "__main__":
     config = get_config()
@@ -37,7 +41,7 @@ if __name__ == "__main__":
     _, test_ids = train_test_split(valtest_ids, test_size=(1-config.val_test_split_ratio), random_state=config.random_state)
     
     X_test, y_test = preprocessor.load_paths_labels(test_ids)
-    test_ds = DynamicRCNNDataset(X_test, y_test, transform=model.get_transform())
+    test_ds = DynamicRCNNDataset(X_test, y_test, transform=model.get_transform(), augment=False)
     test_dl = test_ds.get_loader()
     test_ds_tomo = DynamicTomographyDataset(test_ids, transform=model.get_transform())
     test_dl_tomo = test_ds_tomo.get_loader(batch_size=1)
@@ -62,14 +66,15 @@ if __name__ == "__main__":
     metrics = trainer.validation(test_dl)
     logger.info(f"Test metrics: {metrics}")
     
+    exit()
     
-    # visualizer = Visualizer()    
+    visualizer = Visualizer()    
 
-    # num_samples = len(test_ds) # all of them
-    # # sample_indices = random.sample(range(len(test_ds)), num_samples)
+    num_samples = len(test_ds) # all of them
+    # sample_indices = random.sample(range(len(test_ds)), num_samples)
     
-    # logger.info(f"Generating visualizations for {num_samples} random test samples")
-    # model.eval()
+    logger.info(f"Generating visualizations for {num_samples} random test samples")
+    model.eval()
     
     # logger.info(model.model.backbone)
     # inverse_layer_nums = [1]
@@ -77,11 +82,27 @@ if __name__ == "__main__":
     # # apply the explainer to the test samples
     # explainers = [CAMExplainer(model=model, target_layer=target_layer, target_class=1, cam_class=GradCAM) for target_layer in target_layers]
     # logger.info(f"Explainers initialized, length: {len(explainers)}")
-    # for idx in tqdm(range(num_samples)):
-    #     image_path = X_test[idx]
-    #     image, target = test_ds[idx]
-    #     image = image.unsqueeze(0).to(device)
-    #     image.requires_grad = True
+    id = 0
+    for tomos, targets in tqdm(test_dl_tomo):
+        tomos = torch.stack(tomos).to(device)
+
+        results, original, formatted_targets = trainer._process_tomography_with_outlier_detection(tomos, targets)
+        confidence_threshold = 0.5
+        skips = [skip for _, _, skip in results]
+        pred_boxes = [pred['boxes'][pred['scores'] > confidence_threshold] for pred, _, _ in results]
+        scores = [pred['scores'][pred['scores'] > confidence_threshold] for pred, _, _ in results]
+        true_boxes = [target[0]['boxes'] for target in formatted_targets]
+        
+        visualizer.display_tomo_bboxes(
+            tomo = tomos[0], # i don't like this
+            boxes = pred_boxes,
+            true_boxes = true_boxes,
+            scores = scores,
+            save_dir = Path(str(id)),
+            skips = skips
+        )
+        id +=1
+        
         
     #     # get prediction to display predicted boxes
     #     with torch.no_grad():

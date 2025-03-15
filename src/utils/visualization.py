@@ -54,6 +54,60 @@ class Visualizer:
             )
 
     
+    def display_tomo_bboxes(
+        self,
+        tomo: Union[torch.Tensor, np.ndarray], 
+        boxes: Union[torch.Tensor, np.ndarray],
+        true_boxes: Union[torch.Tensor, np.ndarray],
+        scores: Union[torch.Tensor, np.ndarray],
+        skips: np.ndarray,
+        save_dir: str = None,
+        figsize: Tuple[int, int] = (12, 8)
+        ) -> None:
+        """
+        Visualize bounding boxes on a tomography
+        
+        Args:
+            tomo: Tomography data as tensor or numpy array of shape (D, C, H, W)
+            boxes: Predicted boxes (N, 4) in (x1, y1, x2, y2) format
+            true_boxes: Ground truth boxes (M, 4) in (x1, y1, x2, y2) format
+            scores: Confidence scores for predicted boxes
+            save_dir: Directory to save images (will be created if it doesn't exist)
+            figsize: Figure size for the plot
+        """
+        tomo = utils.to_numpy(tomo if isinstance(tomo, torch.Tensor) else tomo)
+        
+        # Determine number of slices in the tomography
+        num_slices = tomo.shape[0] if len(tomo.shape) == 4 else 1
+        
+        # Create save directory if provided
+        if save_dir is not None:
+            save_path = self.visualization_dir / save_dir
+            save_path.mkdir(parents=True, exist_ok=True)
+        
+        for slice_idx in range(num_slices):
+            # Extract current slice
+            current_slice = tomo[slice_idx] 
+            curr_boxes = boxes[slice_idx]
+            curr_true_boxes = true_boxes[slice_idx]
+            curr_scores = scores[slice_idx]
+            curr_skip = skips[slice_idx]
+            # Create filename if saving
+            filename = Path(f"slice_{slice_idx}.png") if save_dir is not None else None
+            
+            # Use the display_bboxes method to show/save the visualization
+            self.display_bboxes(
+                input=current_slice,
+                pred_boxes=curr_boxes,
+                true_boxes=curr_true_boxes,
+                scores=curr_scores,
+                skip=curr_skip,
+                filename=save_dir / filename if save_dir is not None and filename is not None else None,
+                figsize=figsize
+            )
+
+    
+    
     def display_bboxes(
         self,
         input: Union[str, np.ndarray],
@@ -61,7 +115,8 @@ class Visualizer:
         true_boxes: Union[torch.Tensor, np.ndarray],
         scores: torch.Tensor,
         filename: str = None,
-        figsize: Tuple[int, int] = (12, 8)
+        figsize: Tuple[int, int] = (12, 8),
+        skip: bool = False
     ) -> None:
         """
         Visualize predicted and ground truth boxes on the same image
@@ -81,12 +136,13 @@ class Visualizer:
         else:
             raise ValueError("Input must be a path to an image or a numpy array")
         
+        image_array = image_array[0] if len(image_array.shape) == 3 else image_array
         pred_boxes = utils.to_numpy(pred_boxes)
         true_boxes = utils.to_numpy(true_boxes)
         scores = utils.to_numpy(scores)
         
         plt.figure(figsize=figsize)
-        plt.imshow(image_array)
+        plt.imshow(image_array, cmap='gray')
         ax = plt.gca() # get current axes
         
         # Plot predicted boxes in red
@@ -95,7 +151,7 @@ class Visualizer:
         for box, score in zip(pred_boxes, scores):
             # box, score = box_score
             label = 'Predicted'
-            self._add_bbox_to_plot(ax, box, 'red', label, score)
+            self._add_bbox_to_plot(ax, box, 'red' if skip == False else "purple", label, score)
         
         # Plot ground truth boxes in green
         for box in true_boxes:

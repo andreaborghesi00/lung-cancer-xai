@@ -61,14 +61,15 @@ class FasterRCNNMobileNet(nn.Module):
         self.transforms = FasterRCNN_MobileNet_V3_Large_FPN_Weights.DEFAULT.transforms()
         self.model = fasterrcnn_mobilenet_v3_large_fpn(
             weights=self.weights,
-            box_score_thresh=0.005,  # Lower confidence threshold (default is usually 0.05)
+            box_score_thresh=0.01,  # Lower confidence threshold (default is usually 0.05)
             box_nms_thresh=0.3,     # NMS threshold
-            box_detections_per_img=500, # Increased max detections per image
+            box_detections_per_img=400, # Increased max detections per image
+            rpn_nms_thresh=0.7,     # NMS threshold for RPN proposals
             
         )  # as of now it expects 91 classes (COCO dataset)
         
         # print model backbone architecture
-        # self.logger.info(self.model.backbone)
+        self.logger.debug(self.model.backbone)
         
         # change the number of expected classes
         in_features = self.model.roi_heads.box_predictor.cls_score.in_features
