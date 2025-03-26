@@ -7,19 +7,31 @@ from typing import Optional, Callable, List, Any, Tuple
 import numpy as np
 import pandas as pd
 from pathlib import Path
-
+from monai.transforms import (
+    EnsureChannelFirst,
+    Compose,
+    RandRotate90,
+    Resize,
+    ScaleIntensity,
+    apply_transform,
+    Randomizable
+)
+from monai.utils import MAX_SEED, get_seed
 
 """
 we expect the annotations to be processed already, i.e. the nodule coordinates are in the same space as the CT,
 also the CTs should be already preprocessed and saved as numpy arrays.
 NOTE: the given annotations dataframe should contain all the nodules of the listed patients not to incur in data-leakage
 """
-class DLCSDataset(Dataset):
+class DLCSDataset(Dataset, Randomizable):
     def __init__(
         self,
         annotations: pd.DataFrame,
         data_dir: str,
-        transform: Optional[Callable] = None, 
+        transform: Callable,
+        image_key: str = "image",
+        label_key: str = "label",
+        box_key: str = "box", 
     ):
         self.logger = logging.getLogger(__name__)
         self.config = get_config()
@@ -34,6 +46,8 @@ class DLCSDataset(Dataset):
         self.pids = self.annotations["patient-id"].unique()
         self.logger.info(f"Dataset initialized with {len(self.pids)} patients with a total of {len(self.annotations)} nodules")
         
+        self.set_random_state(seed=get_seed())
+        self._seed = 0
         
     def __len__(self):
         return len(self.pids)
@@ -43,30 +57,34 @@ class DLCSDataset(Dataset):
         pid = self.pids[idx]
         patient_annotations = self.annotations[self.annotations["patient-id"] == pid]
         patient_annotations.reset_index(drop=True, inplace=True)
+        filename = f"{self.data_dir}/{pid}.npy"
         
-        patient_data = np.load(f"{self.data_dir}/{pid}.npy")
-        patient_data = torch.tensor(patient_data, dtype=torch.float32)
+        boxes = torch.tensor(patient_annotations[['coordX', 'coordY', 'coordZ', 'w', 'h', 'd']].values, dtype=torch.float32)
+        labels = torch.tensor(patient_annotations["Malignant_lbl"].values, dtype=torch.long) 
         
-        # if self.transform is not None:
-        #     patient_data = self.transform(patient_data)
+        # apply transform
+        if isinstance(self.transform, Randomizable):
+            self.transform.set_random_state(seed=self._seed)
+        data = {
+            "image": filename,
+            "box": boxes,
+            "label": labels,
+            }
         
-        labels = self.prepare_labels(patient_annotations, patient_data.shape)
-        
-        return patient_data, labels
+        transformed_data = apply_transform(self.transform, data)
+            
+        return transformed_data
     
-    def prepare_labels(self, annotations: pd.DataFrame, shape: Tuple[int, int, int]) -> torch.Tensor:
-
-        box_tensor = torch.tensor(annotations[['coordZ', 'coordX', 'coordY', 'd', 'w', 'h']].values, dtype=torch.float32) / np.repeat(np.array(shape), 2)
         
-        labels = {
-            "boxes": box_tensor,
-            "labels": torch.tensor(annotations["Malignant_lbl"].values, dtype=torch.float32) # 0: malignant, 1: benign
-        }
-        return labels
+    def randomize(self, data: Any = None) -> None:
+        self._seed = self.R.randint(MAX_SEED, dtype="uint32")
     
-    def get_loader(self, shuffle: bool = False):
+    
+    def get_loader(self, shuffle: bool = False, num_workers:int=1):
         return DataLoader(self,
                             batch_size=1,
                             shuffle=shuffle,
-                            num_workers=1,
-                            pin_memory=True)
+                            num_workers=num_workers,
+                            pin_memory=True,
+                            persistent_workers=True,
+                            )
