@@ -60,7 +60,8 @@ class DLCSDataset(Dataset, Randomizable):
         filename = f"{self.data_dir}/{pid}.npy"
         
         boxes = torch.tensor(patient_annotations[['coordX', 'coordY', 'coordZ', 'w', 'h', 'd']].values, dtype=torch.float32)
-        labels = torch.tensor(patient_annotations["Malignant_lbl"].values, dtype=torch.long) 
+        labels = torch.tensor(patient_annotations["Malignant_lbl"].values, dtype=torch.long)
+        # labels_zero = torch.zeros_like(labels)
         
         # apply transform
         if isinstance(self.transform, Randomizable):
