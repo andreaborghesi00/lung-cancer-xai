@@ -65,7 +65,7 @@ class ModelConfig:
         assert self.checkpoint_dir, "Checkpoint directory must be specified"
     
     @classmethod
-    def load_config(cls, config_path: str = os.path.join(Path(__file__).parent, "config.yaml")) -> "ModelConfig":
+    def load_config(cls, config_path: str = os.path.join(Path(__file__).parent, "config_2d.yaml")) -> "ModelConfig":
         # log current working directory
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"Config file not found at path {config_path}")
@@ -81,7 +81,7 @@ def get_config(config_path: str = None):
     global _config_instance
     if _config_instance is None:
         if config_path is None:
-            config_path = os.path.join(Path(__file__).parent, "config.yaml") # default config path
+            config_path = os.path.join(Path(__file__).parent, "config_2d.yaml") # default config path
         _config_instance = ModelConfig.load_config(config_path)
     
     return _config_instance
