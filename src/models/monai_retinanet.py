@@ -55,8 +55,9 @@ def _build_network(feature_extractor, spatial_dims, num_classes, num_anchors, re
 def _configure_detector(detector,
                         score_thresh,
                         nms_thresh,
-                        sw_roi_size=[512, 512, 128],
+                        sw_roi_size=[512, 512, 320],
                         sw_overlap=0.10,
+                        sw_batch_size=1,
                         ):
     """Configure detector for training and validation."""
     # Set training components
@@ -80,7 +81,7 @@ def _configure_detector(detector,
     detector.set_sliding_window_inferer(
         roi_size=sw_roi_size,
         overlap=sw_overlap,
-        sw_batch_size=1,
+        sw_batch_size=sw_batch_size,
         mode="constant",
         device="cpu",
     ) 

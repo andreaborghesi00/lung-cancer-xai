@@ -17,6 +17,7 @@ from monai.transforms import (
     Randomizable
 )
 from monai.utils import MAX_SEED, get_seed
+from monai.data.utils import no_collation
 
 """
 we expect the annotations to be processed already, i.e. the nodule coordinates are in the same space as the CT,
@@ -81,11 +82,12 @@ class DLCSDataset(Dataset, Randomizable):
         self._seed = self.R.randint(MAX_SEED, dtype="uint32")
     
     
-    def get_loader(self, shuffle: bool = False, num_workers:int=1):
+    def get_loader(self, shuffle: bool = False, num_workers:int=1, batch_size=1):
         return DataLoader(self,
-                            batch_size=1,
+                            batch_size=batch_size,
                             shuffle=shuffle,
                             num_workers=num_workers,
                             pin_memory=True,
                             persistent_workers=True,
+                            collate_fn=no_collation
                             )

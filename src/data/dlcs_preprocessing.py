@@ -154,7 +154,9 @@ def get_train_transforms(
     point_key: str,
     box_mask_key: str,
     affine_lps_to_ras: bool = False,
-    gt_box_mode: str = "cccwhd"
+    gt_box_mode: str = "cccwhd",
+    pos_crop: int = 1,
+    neg_crop: int = 1
     ):
     train_transform = Compose([
     LoadImaged(keys=[image_key], image_only=False, meta_key_postfix="meta_dict", reader="NumpyReader"),
@@ -184,8 +186,8 @@ def get_train_transforms(
         label_key=label_mask_key,
         spatial_size=patch_size,
         num_samples=batch_size,
-        pos=1,
-        neg=0,
+        pos=pos_crop,
+        neg=neg_crop,
     ),
     ApplyTransformToPointsd(keys=[point_key],
                             refer_keys=image_key,
