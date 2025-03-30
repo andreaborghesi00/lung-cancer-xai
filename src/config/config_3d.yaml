@@ -12,6 +12,8 @@ pretrained: False
 batch_size: 3
 epochs: 100
 learning_rate: 0.001
+# scaler_init_scale: 
+# scaler_growth_interval:
 
 # Data settings
 data_dir: "../subset_1_to_3_processed"

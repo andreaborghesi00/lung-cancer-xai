@@ -36,6 +36,8 @@ class ModelConfig:
     patience: int = 0
     validate_every: int = 5
     warmup_epochs: int = 5
+    scaler_init_scale: float = 2 ** 16
+    scaler_growth_interval: int = 2000
     
     # Dataset parameters
     patch_size: Tuple[int, int, int] = (192, 192, 72)
