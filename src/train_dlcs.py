@@ -90,7 +90,7 @@ if __name__ == "__main__":
 
     train_transform = get_train_transforms(
         patch_size=config.patch_size,
-        batch_size=config.batch_size,
+        batch_size=config.crop_batch_size,
         image_key=config.image_key,
         box_key=config.box_key,
         label_key=config.label_key,
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     train_ds = DLCSDataset(train_annotations, config.data_dir, transform=train_transform)
     val_ds = DLCSDataset(val_annotations, config.data_dir, transform=val_transform)
     
-    train_dl = train_ds.get_loader(shuffle=True, num_workers=config.dl_workers, batch_size=2) # careful with batch size
+    train_dl = train_ds.get_loader(shuffle=True, num_workers=config.dl_workers, batch_size=config.dl_batch_size) # careful with batch size
     val_dl = val_ds.get_loader(shuffle=False, num_workers=config.dl_workers, batch_size=1)
     
     
@@ -136,13 +136,13 @@ if __name__ == "__main__":
         base_anchor_shapes=config.base_anchor_shapes,
         conv1_t_stride=config.conv1_t_stride,
     )
-    scaler = GradScaler("cuda", init_scale=1024, growth_interval=1000)
+    scaler = GradScaler("cuda", init_scale=config.scaler_init_scale, growth_interval=config.scaler_growth_interval)
     
     detector.train()
     
     optimizer = torch.optim.SGD(
         detector.network.parameters(),
-        lr=0.001,
+        lr=config.learning_rate,
         momentum=0.9,
         weight_decay=3e-5,
         nesterov=True,
@@ -195,6 +195,7 @@ if __name__ == "__main__":
     coco_metric = COCOMetric(classes=["malignant", "benign"], iou_list=[0.1, 0.5, 0.75], iou_range=[0.5, 0.95, 0.05], max_detection=[100])
     optimizer.zero_grad()
 
+    
     
     # ------------- Training loop -------------
     for epoch in range(config.epochs):
@@ -253,10 +254,16 @@ if __name__ == "__main__":
                     if config.use_wandb:
                         wandb.log(losses)
                     train_pbar.set_postfix(losses)
-            # break # TESTING
-        scheduler.step()                    
+        if config.use_wandb:
+            wandb.log({"learning_rate": optimizer.param_groups[0]["lr"]})
+        scheduler.step()            
         # save model
         torch.jit.save(detector.network, os.path.join(config.checkpoint_dir, config.last_model_save_path))
+        
+        # save model on wandb
+        if config.use_wandb:
+            wandb.save(os.path.join(config.checkpoint_dir, config.last_model_save_path),
+                       base_path="checkpoints")
 
         # ------------- Validation for model selection -------------
         if (epoch+1) % config.validate_every == 0:
@@ -269,9 +276,6 @@ if __name__ == "__main__":
             val_outputs_all = []
             val_targets_all = []
             val_pbar = tqdm(val_dl, total=len(val_dl))
-            
-            # counter = 0
-            # val_samples = 3
             
             with torch.no_grad():
                 for val_data in val_pbar:
@@ -289,9 +293,6 @@ if __name__ == "__main__":
                     val_outputs_all += val_outputs 
                     val_targets_all += val_data # here are the ground truths (without the image)
                     
-                    # counter += 1
-                    # if counter > val_samples:
-                    # break # TESTING
                     
             # TODO: visualize an inference image and boxes
             
@@ -320,6 +321,9 @@ if __name__ == "__main__":
             if config.use_wandb:
                 wandb.log(val_epoch_metric_dict)
             logger.info(f"Validation metrics: {val_epoch_metric_dict}")
+            
+            
+            
             gc.collect()
             detector.train()
             

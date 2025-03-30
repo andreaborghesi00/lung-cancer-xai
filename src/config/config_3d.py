@@ -26,7 +26,8 @@ class ModelConfig:
     spacing: List[float] = field(default_factory=lambda: [0.703125, 0.703125, 1.25])
     
     # Training hyperparameters
-    batch_size: int = 4
+    crop_batch_size: int = 4
+    dl_batch_size: int = 1
     epochs: int = 150
     learning_rate: float = 1e-3
     dl_workers: int = 4
