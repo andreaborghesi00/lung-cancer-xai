@@ -6,7 +6,6 @@ logs/*
 wandb/*
 visualizations/*
 src/notebooks/scrap.ipynb
-*.txt
 *.pt
 dev_roi/*
 yolo_models/*
