@@ -65,7 +65,7 @@ from monai.apps.detection.metrics.coco import COCOMetric
 from monai.apps.detection.metrics.matching import matching_batch
 
 # Local imports
-from config.config import get_config
+from config.config_3d import get_config
 from data.dlcs_dataset import DLCSDataset
 from data.dlcs_preprocessing import GenerateBoxMask, GenerateExtendedBoxMask, get_train_transforms, get_val_transforms
 from models.checkpointed_resnet import CheckpointedResNet
@@ -81,51 +81,51 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = True 
     torch.set_num_threads(4)
 
-    data_dir = Path("../DLCS/subset_1_to_3_processed")
-    annotations_path = Path("../DLCS/DLCSD24_Annotations_voxel_1_to_3.csv")    
-    pretrained = False
-    use_wandb = False
-    base_anchor_shapes = [[6,8,4],[8,6,5],[10,10,6]] # [width, height, depth]
-    conv1_t_stride = [2,2,1] # kernel stride for the first conv layer
-    returned_layers = [1,2]
-    nms_thresh = 0.22
-    score_thresh = 0.02
-    spatial_dims = 3
-    spacing = [0.703125, 0.703125, 1.25] # mm
-    n_input_channels = 1
-    epochs = 150
-    validate_every = 5
-    annotations = pd.read_csv(annotations_path)
-    logger.info(f"Annotations loaded from {annotations_path}")
-    image_key = "image"
-    box_key = "box"
-    label_key = "label"
-    point_key = "points"
-    label_mask_key = "label_mask"
-    box_mask_key = "box_mask"
-    gt_box_mode = "cccwhd"
-    patch_size = (192, 192, 72)
-    batch_size = 4 # more than 4 will cause OOM (on a 16GB GPU)
+    annotations = pd.read_csv(config.annotations_path)
+    # data_dir = Path("../DLCS/subset_1_to_3_processed")
+    # annotations_path = Path("../DLCS/DLCSD24_Annotations_voxel_1_to_3.csv")    
+    # pretrained = False
+    # use_wandb = False
+    # base_anchor_shapes = [[6,8,4],[8,6,5],[10,10,6]] # [width, height, depth]
+    # conv1_t_stride = [2,2,1] # kernel stride for the first conv layer
+    # returned_layers = [1,2]
+    # nms_thresh = 0.22
+    # score_thresh = 0.02
+    # spatial_dims = 3
+    # spacing = [0.703125, 0.703125, 1.25] # mm
+    # n_input_channels = 1
+    # epochs = 150
+    # validate_every = 5
+    # logger.info(f"Annotations loaded from {annotations_path}")
+    # image_key = "image"
+    # box_key = "box"
+    # label_key = "label"
+    # point_key = "points"
+    # label_mask_key = "label_mask"
+    # box_mask_key = "box_mask"
+    # gt_box_mode = "cccwhd"
+    # patch_size = (192, 192, 72)
+    # batch_size = 4 # more than 4 will cause OOM (on a 16GB GPU)
 
     affine_lps_to_ras = False
 
     train_transform = get_train_transforms(
-        patch_size=patch_size,
-        batch_size=batch_size,
-        image_key=image_key,
-        box_key=box_key,
-        label_key=label_key,
-        point_key=point_key,
-        label_mask_key=label_mask_key,
-        box_mask_key=box_mask_key,
-        gt_box_mode=gt_box_mode,
+        patch_size=config.patch_size,
+        batch_size=config.batch_size,
+        image_key=config.image_key,
+        box_key=config.box_key,
+        label_key=config.label_key,
+        point_key=config.point_key,
+        label_mask_key=config.label_mask_key,
+        box_mask_key=config.box_mask_key,
+        gt_box_mode=config.gt_box_mode,
     )
     
     val_transform = get_val_transforms(
-        image_key=image_key,
-        box_key=box_key,
-        label_key=label_key,
-        gt_box_mode=gt_box_mode,
+        image_key=config.image_key,
+        box_key=config.box_key,
+        label_key=config.label_key,
+        gt_box_mode=config.gt_box_mode,
         )
     
     pids = annotations["patient-id"].unique()
@@ -142,8 +142,8 @@ if __name__ == "__main__":
     val_annotations = annotations[annotations["patient-id"].isin(val_pids)]
     val_annotations.reset_index(drop=True, inplace=True)
     
-    train_ds = DLCSDataset(train_annotations, data_dir, transform=train_transform)
-    val_ds = DLCSDataset(val_annotations, data_dir, transform=val_transform)
+    train_ds = DLCSDataset(train_annotations, config.data_dir, transform=train_transform)
+    val_ds = DLCSDataset(val_annotations, config.data_dir, transform=val_transform)
     
     train_dl = train_ds.get_loader(shuffle=True, num_workers=4)
     val_dl = val_ds.get_loader(shuffle=False, num_workers=4)
@@ -151,76 +151,76 @@ if __name__ == "__main__":
     
     detector = rn.create_retinanet_detector(
         device=device,
-        pretrained=pretrained,
+        pretrained=config.pretrained,
         pretrained_path=None,
-        n_input_channels=n_input_channels,
-        base_anchor_shapes=base_anchor_shapes,
-        conv1_t_stride=conv1_t_stride,
+        n_input_channels=config.n_input_channels,
+        base_anchor_shapes=config.base_anchor_shapes,
+        conv1_t_stride=config.conv1_t_stride,
     )
-    scaler = GradScaler("cuda")
+    scaler = GradScaler("cuda", init_scale=512, growth_interval=1000)
     
     detector.train()
     
-    # optimizer = torch.optim.SGD(
-    #     detector.network.parameters(),
-    #     lr=0.001,
-    #     momentum=0.9,
-    #     weight_decay=3e-5,
-    #     nesterov=True,
-    # )
-    
-    # scheduler = torch.optim.lr_scheduler.StepLR(
-    #     optimizer,
-    #     step_size=50,
-    #     gamma=0.1,
-    # )
-    
-    
-    optimizer = torch.optim.NAdam(
-        params=detector.network.parameters(),
-        lr=1e-3,
-        betas=(0.9, 0.999),
+    optimizer = torch.optim.SGD(
+        detector.network.parameters(),
+        lr=0.001,
+        momentum=0.9,
         weight_decay=3e-5,
+        nesterov=True,
     )
     
-    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+    scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
-        start_factor=1e-2,
-        end_factor=1.0,
-        total_iters=5,
+        step_size=50,
+        gamma=0.1,
     )
     
-    cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer,
-        T_max=epochs - 5,
-        eta_min=1e-5,
-    )
+    
+    # optimizer = torch.optim.NAdam(
+    #     params=detector.network.parameters(),
+    #     lr=1e-3,
+    #     betas=(0.9, 0.999),
+    #     weight_decay=3e-5,
+    # )
+    
+    # warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+    #     optimizer,
+    #     start_factor=1e-2,
+    #     end_factor=1.0,
+    #     total_iters=config.warmup_epochs,
+    # )
+    
+    # cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     optimizer,
+    #     T_max=config.epochs - config.warmup_epochs,
+    #     eta_min=1e-5,
+    # )
         
-    scheduler = torch.optim.lr_scheduler.SequentialLR(
-        optimizer,
-        schedulers=[warmup_scheduler, cosine_scheduler],
-        milestones=[5],
-    )
+    # scheduler = torch.optim.lr_scheduler.SequentialLR(
+    #     optimizer,
+    #     schedulers=[warmup_scheduler, cosine_scheduler],
+    #     milestones=[config.warmup_epochs],
+    # )
     
 
-    if use_wandb:
-        wandb.init(project="3D Object detection (DLCS)",
-                        name=f"RetinaNet - 1to3 - augmented - {epochs} epochs ",
-                        notes="training on 2 classes, linear warmup, cosine annealing after 5",
+    if config.use_wandb:
+        wandb.init(project=config.project_name,
+                        name=config.experiment_name,
+                        notes=config.notes,
                         tags=[detector.__class__.__name__,
                                 optimizer.__class__.__name__,],
         )
         wandb.watch(detector.network)
-    
-    # coco_metric = COCOMetric(classes=["malignant", "benign"], iou_list=[0.1, 0.5, 0.75], iou_range=[0.5, 0.95, 0.05], max_detection=[100])
+        wandb.config.update(config.__dict__)
+
     coco_metric = COCOMetric(classes=["malignant", "benign"], iou_list=[0.1, 0.5, 0.75], iou_range=[0.5, 0.95, 0.05], max_detection=[100])
     optimizer.zero_grad()
 
     
     # ------------- Training loop -------------
-    for epoch in range(epochs):
-        logger.info(f"Epoch {epoch + 1}/{epochs}")
-        train_pbar = tqdm(train_dl, total=len(train_dl))
+    for epoch in range(config.epochs):
+        logger.info(f"Epoch {epoch + 1}/{config.epochs}")
+        train_pbar = tqdm(train_dl,  total=len(train_dl))
         for batched_data in train_pbar: # single epoch
             inputs = [
                     batch_data_i["image"].squeeze(0).to(device)
@@ -251,12 +251,16 @@ if __name__ == "__main__":
                     
                     
                     scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
+                    if not torch.isinf(loss).any() and not torch.isnan(loss).any():
+                        scaler.step(optimizer)
+                        scaler.update()
+                    else:
+                        logger.info("Loss is inf or nan, skipping step")
+                        continue
                     
                     # optimizer.zero_grad()
                     losses = {"tot": loss.item(), "cls": outputs[detector.cls_key].item(), "reg": outputs[detector.box_reg_key].item()}
-                    if use_wandb:
+                    if config.use_wandb:
                         wandb.log(losses)
                     train_pbar.set_postfix(losses)
             
@@ -265,7 +269,7 @@ if __name__ == "__main__":
         torch.jit.save(detector.network, "checkpoints/RetinaNet/retinanet_augmented_1to3_150_epochs_last.pt")
 
         # ------------- Validation for model selection -------------
-        if epoch % validate_every == 0:
+        if epoch % config.validate_every == 0:
             logger.info("Validating...")
             del inputs, batched_data
 
@@ -322,7 +326,7 @@ if __name__ == "__main__":
                 ],
             )
             val_epoch_metric_dict = coco_metric(results_metric)[0]
-            if use_wandb:
+            if config.use_wandb:
                 wandb.log(val_epoch_metric_dict)
             logger.info(f"Validation metrics: {val_epoch_metric_dict}")
             gc.collect()

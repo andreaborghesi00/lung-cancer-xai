@@ -1,0 +1,19 @@
+# General settings and logging
+project_name: "3D Object detection (DLCS)"
+experiment_name: "RetinaNet - 75 epochs augmented"
+notes: "augmentation with random rotation, blurring, contrast."
+
+use_wandb: True
+
+# Model settings
+pretrained: False
+
+# Training Hyperparameters
+batch_size: 4
+epochs: 75
+learning_rate: 0.001
+
+# Data settings
+data_dir: "../DLCS/subset_1_to_3_processed"
+annotations_path: "../DLCS/DLCSD24_Annotations_voxel_1_to_3.csv"
+
