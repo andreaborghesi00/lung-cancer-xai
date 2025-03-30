@@ -5,7 +5,6 @@ import matplotlib.pyplot as plt
 import torch
 from typing import Tuple, Union
 from PIL import Image
-from config.config import get_config
 from pathlib import Path
 
 
