@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Tuple, List, Optional, Callable, Any, Union
 import torch
-from config.config import get_config
+from config.config_3d import get_config
 import logging
 import SimpleITK as stik
 from skimage.segmentation import clear_border
