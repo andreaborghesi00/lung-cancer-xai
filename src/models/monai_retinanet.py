@@ -52,7 +52,12 @@ def _build_network(feature_extractor, spatial_dims, num_classes, num_anchors, re
         )
     )
 
-def _configure_detector(detector, score_thresh, nms_thresh):
+def _configure_detector(detector,
+                        score_thresh,
+                        nms_thresh,
+                        sw_roi_size=[512, 512, 128],
+                        sw_overlap=0.10,
+                        ):
     """Configure detector for training and validation."""
     # Set training components
     detector.set_atss_matcher(num_candidates=4, center_in_gt=False)
@@ -71,6 +76,14 @@ def _configure_detector(detector, score_thresh, nms_thresh):
         nms_thresh=nms_thresh,
         detections_per_img=100,
     )
+    
+    detector.set_sliding_window_inferer(
+        roi_size=sw_roi_size,
+        overlap=sw_overlap,
+        sw_batch_size=1,
+        mode="constant",
+        device="cpu",
+    ) 
     
     return detector
 
