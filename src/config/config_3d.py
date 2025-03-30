@@ -50,6 +50,7 @@ class ModelConfig:
     # Paths and Logging
     data_dir: str = "../DLCS/subset_1_to_3_processed"
     annotations_path: str = "../DLCS/DLCSD24_Annotations_voxel_1_to_3.csv"
+    last_model_save_path: str = field(default=None)
     log_dir: str = "logs"
     checkpoint_dir: str = "checkpoints/RetinaNet"
     model_checkpoint: str = field(default=None)

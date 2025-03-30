@@ -266,7 +266,7 @@ if __name__ == "__main__":
             
         scheduler.step()                    
         # save model
-        torch.jit.save(detector.network, "checkpoints/RetinaNet/retinanet_augmented_1to3_150_epochs_last.pt")
+        torch.jit.save(detector.network, os.path.join(config.checkpoint_dir, config.last_model_save_path))
 
         # ------------- Validation for model selection -------------
         if epoch % config.validate_every == 0:

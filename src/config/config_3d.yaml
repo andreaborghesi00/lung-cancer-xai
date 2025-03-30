@@ -17,3 +17,6 @@ learning_rate: 0.001
 data_dir: "../DLCS/subset_1_to_3_processed"
 annotations_path: "../DLCS/DLCSD24_Annotations_voxel_1_to_3.csv"
 
+# Logging and Checkpointing
+last_model_save_path: "75_epochs_augmented_last.pt"
+
