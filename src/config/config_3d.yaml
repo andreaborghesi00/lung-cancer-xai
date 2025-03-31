@@ -1,7 +1,7 @@
 # General settings and logging
 project_name: "3D Object detection (DLCS)"
-experiment_name: "Net upload test"
-notes: "augmentation with random rotation, blurring, contrast. Linear warmup for 5 epochs, then cosine annealing. Trying on a vast rented GPU"
+experiment_name: "3 subsets, no augmentation, warmup, cosine annealing"
+notes: "Linear warmup for 5 epochs, then cosine annealing. Trying on a vast rented GPU. 3 dlcs subsets totaling 480 patients"
 
 use_wandb: True
 
@@ -9,10 +9,12 @@ use_wandb: True
 pretrained: False
 
 # Training Hyperparameters
-crop_batch_size: 4
-dl_batch_size: 1
-epochs: 100
+crop_batch_size: 3
+dl_batch_size: 2
+epochs: 150
 learning_rate: 0.001
+augment: False
+validate_every: 10
 # scaler_init_scale: 
 # scaler_growth_interval:
 
@@ -22,5 +24,5 @@ annotations_path: "../DLCSD24_Annotations_voxel_1_to_3.csv"
 dl_workers: 8
 
 # Logging and Checkpointing
-last_model_save_path: "100_epochs_augmented_warmup_last.pt"
+last_model_save_path: "150_epochs_augmented_warmup_last.pt"
 

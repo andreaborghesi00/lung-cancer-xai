@@ -145,6 +145,7 @@ def get_tomography_paths(dataset_dir: str) -> List[str]:
 
 
 def get_train_transforms(
+    augment: bool,
     patch_size: Tuple[int, int, int],
     batch_size: int,
     image_key: str,
@@ -158,119 +159,166 @@ def get_train_transforms(
     pos_crop: int = 1,
     neg_crop: int = 1
     ):
-    train_transform = Compose([
-    LoadImaged(keys=[image_key], image_only=False, meta_key_postfix="meta_dict", reader="NumpyReader"),
-    Lambdad(keys=[image_key], func=lambda x: np.transpose(x, (2, 1, 0))),  # D, H, W -> WHD (x, y, z)
-    EnsureChannelFirstd(keys=[image_key], channel_dim='no_channel'),
-    EnsureTyped(keys=[image_key, box_key], dtype=torch.float32),
-    EnsureTyped(keys=[label_key], dtype=torch.long),
-    StandardizeEmptyBoxd(box_keys=[box_key], box_ref_image_keys=image_key),
-    ConvertBoxToStandardModed(box_keys=[box_key], mode=gt_box_mode),
-    ConvertBoxToPointsd(keys=[box_key], point_key=point_key),
-    # GenerateBoxMask(
-    #     keys=box_key,
-    #     image_key=image_key,
-    #     box_key=box_key,
-    #     mask_image_key=label_mask_key,
-    #     spatial_size=patch_size,
-    # ),
-    GenerateExtendedBoxMask( # this allows for the box to not always be around the center of the cropped image
-        keys=box_key,
-        image_key=image_key,
-        spatial_size=patch_size,
-        whole_box=True,
-        mask_image_key=label_mask_key,
-    ),
-    RandCropByPosNegLabeld(
-        keys=[image_key],
-        label_key=label_mask_key,
-        spatial_size=patch_size,
-        num_samples=batch_size,
-        pos=pos_crop,
-        neg=neg_crop,
-    ),
-    ApplyTransformToPointsd(keys=[point_key],
-                            refer_keys=image_key,
-                            affine_lps_to_ras=affine_lps_to_ras,
-                            ),
-    ConvertPointsToBoxesd(keys=[point_key], box_key=box_key),      
-    ClipBoxToImaged(
-        box_keys=box_key,
-        label_keys=[label_key],
-        box_ref_image_keys=image_key,
-        remove_empty=True,
-    ),
-    
-    BoxToMaskd(
-    box_keys=[box_key],
-    label_keys=[label_key],
-    box_mask_keys=[box_mask_key],
-    box_ref_image_keys=[image_key],
-    min_fg_label=0,
-    ellipse_mask=True,
-    ),
-    RandRotated(
-        keys=[image_key, box_mask_key],
-        mode=["nearest", "nearest"],
-        prob=0.2,
-        range_x=np.pi / 6,
-        range_y=np.pi / 6,
-        range_z=np.pi / 6,
-        keep_size=True,
-        padding_mode="border",
-    ),
-    RandZoomd(
-        keys=[image_key, box_mask_key],
-        prob=0.2,
-        min_zoom=0.7,
-        max_zoom=1.4,
-        padding_mode="constant",
-        keep_size=True,
-    ),
-    RandFlipd(
-        keys=[image_key, box_mask_key],
-        prob=0.5,
-        spatial_axis=0,
-    ),
-    RandFlipd(
-        keys=[image_key, box_mask_key],
-        prob=0.5,
-        spatial_axis=1,
-    ),
-    RandFlipd(
-        keys=[image_key, box_mask_key],
-        prob=0.5,
-        spatial_axis=2,
-    ),
-    RandRotate90d(
-        keys=[image_key, box_mask_key],
-        prob=0.75,
-        max_k=3,
-        spatial_axes=(0, 1),
-    ),
-    MaskToBoxd(
-        box_keys=[box_key],
-        label_keys=[label_key],
-        box_mask_keys=[box_mask_key],
-        min_fg_label=0,
-    ),
-    RandGaussianNoised(keys=[image_key], prob=0.1, mean=0, std=0.1),
-    RandGaussianSmoothd(
-        keys=[image_key],
-        prob=0.1,
-        sigma_x=(0.5, 1.0),
-        sigma_y=(0.5, 1.0),
-        sigma_z=(0.5, 1.0),
-    ),
-    RandScaleIntensityd(keys=[image_key], prob=0.15, factors=0.25),
-    RandShiftIntensityd(keys=[image_key], prob=0.15, offsets=0.1),
-    RandAdjustContrastd(keys=[image_key], prob=0.3, gamma=(0.7, 1.5)),
-    
-    
-    DeleteItemsd(keys=[label_mask_key, point_key, "image_meta_dict", "image_meta_dict_meta_dict"]),
-    EnsureTyped(keys=[image_key, box_key], dtype=torch.float32),
-    ])
-    
+    if augment:
+        train_transform = Compose([
+            LoadImaged(keys=[image_key], image_only=False, meta_key_postfix="meta_dict", reader="NumpyReader"),
+            Lambdad(keys=[image_key], func=lambda x: np.transpose(x, (2, 1, 0))),  # D, H, W -> WHD (x, y, z)
+            EnsureChannelFirstd(keys=[image_key], channel_dim='no_channel'),
+            EnsureTyped(keys=[image_key, box_key], dtype=torch.float32),
+            EnsureTyped(keys=[label_key], dtype=torch.long),
+            StandardizeEmptyBoxd(box_keys=[box_key], box_ref_image_keys=image_key),
+            ConvertBoxToStandardModed(box_keys=[box_key], mode=gt_box_mode),
+            ConvertBoxToPointsd(keys=[box_key], point_key=point_key),
+            # GenerateBoxMask(
+            #     keys=box_key,
+            #     image_key=image_key,
+            #     box_key=box_key,
+            #     mask_image_key=label_mask_key,
+            #     spatial_size=patch_size,
+            # ),
+            GenerateExtendedBoxMask( # this allows for the box to not always be around the center of the cropped image
+                keys=box_key,
+                image_key=image_key,
+                spatial_size=patch_size,
+                whole_box=True,
+                mask_image_key=label_mask_key,
+            ),
+            RandCropByPosNegLabeld(
+                keys=[image_key],
+                label_key=label_mask_key,
+                spatial_size=patch_size,
+                num_samples=batch_size,
+                pos=pos_crop,
+                neg=neg_crop,
+            ),
+            ApplyTransformToPointsd(keys=[point_key],
+                                    refer_keys=image_key,
+                                    affine_lps_to_ras=affine_lps_to_ras,
+                                    ),
+            ConvertPointsToBoxesd(keys=[point_key], box_key=box_key),      
+            ClipBoxToImaged(
+                box_keys=box_key,
+                label_keys=[label_key],
+                box_ref_image_keys=image_key,
+                remove_empty=True,
+            ),
+            
+            BoxToMaskd(
+            box_keys=[box_key],
+            label_keys=[label_key],
+            box_mask_keys=[box_mask_key],
+            box_ref_image_keys=[image_key],
+            min_fg_label=0,
+            ellipse_mask=True,
+            ),
+            RandRotated(
+                keys=[image_key, box_mask_key],
+                mode=["nearest", "nearest"],
+                prob=0.2,
+                range_x=np.pi / 6,
+                range_y=np.pi / 6,
+                range_z=np.pi / 6,
+                keep_size=True,
+                padding_mode="border",
+            ),
+            RandZoomd(
+                keys=[image_key, box_mask_key],
+                prob=0.2,
+                min_zoom=0.7,
+                max_zoom=1.4,
+                padding_mode="constant",
+                keep_size=True,
+            ),
+            RandFlipd(
+                keys=[image_key, box_mask_key],
+                prob=0.5,
+                spatial_axis=0,
+            ),
+            RandFlipd(
+                keys=[image_key, box_mask_key],
+                prob=0.5,
+                spatial_axis=1,
+            ),
+            RandFlipd(
+                keys=[image_key, box_mask_key],
+                prob=0.5,
+                spatial_axis=2,
+            ),
+            RandRotate90d(
+                keys=[image_key, box_mask_key],
+                prob=0.75,
+                max_k=3,
+                spatial_axes=(0, 1),
+            ),
+            MaskToBoxd(
+                box_keys=[box_key],
+                label_keys=[label_key],
+                box_mask_keys=[box_mask_key],
+                min_fg_label=0,
+            ),
+            RandGaussianNoised(keys=[image_key], prob=0.1, mean=0, std=0.1),
+            RandGaussianSmoothd(
+                keys=[image_key],
+                prob=0.1,
+                sigma_x=(0.5, 1.0),
+                sigma_y=(0.5, 1.0),
+                sigma_z=(0.5, 1.0),
+            ),
+            RandScaleIntensityd(keys=[image_key], prob=0.15, factors=0.25),
+            RandShiftIntensityd(keys=[image_key], prob=0.15, offsets=0.1),
+            RandAdjustContrastd(keys=[image_key], prob=0.3, gamma=(0.7, 1.5)),
+            
+            
+            DeleteItemsd(keys=[label_mask_key, point_key, "image_meta_dict", "image_meta_dict_meta_dict"]),
+            EnsureTyped(keys=[image_key, box_key], dtype=torch.float32),
+        ])
+    else:
+                train_transform = Compose([
+            LoadImaged(keys=[image_key], image_only=False, meta_key_postfix="meta_dict", reader="NumpyReader"),
+            Lambdad(keys=[image_key], func=lambda x: np.transpose(x, (2, 1, 0))),  # D, H, W -> WHD (x, y, z)
+            EnsureChannelFirstd(keys=[image_key], channel_dim='no_channel'),
+            EnsureTyped(keys=[image_key, box_key], dtype=torch.float32),
+            EnsureTyped(keys=[label_key], dtype=torch.long),
+            StandardizeEmptyBoxd(box_keys=[box_key], box_ref_image_keys=image_key),
+            ConvertBoxToStandardModed(box_keys=[box_key], mode=gt_box_mode),
+            ConvertBoxToPointsd(keys=[box_key], point_key=point_key),
+            # GenerateBoxMask(
+            #     keys=box_key,
+            #     image_key=image_key,
+            #     box_key=box_key,
+            #     mask_image_key=label_mask_key,
+            #     spatial_size=patch_size,
+            # ),
+            GenerateExtendedBoxMask( # this allows for the box to not always be around the center of the cropped image
+                keys=box_key,
+                image_key=image_key,
+                spatial_size=patch_size,
+                whole_box=True,
+                mask_image_key=label_mask_key,
+            ),
+            RandCropByPosNegLabeld(
+                keys=[image_key],
+                label_key=label_mask_key,
+                spatial_size=patch_size,
+                num_samples=batch_size,
+                pos=pos_crop,
+                neg=neg_crop,
+            ),
+            ApplyTransformToPointsd(keys=[point_key],
+                                    refer_keys=image_key,
+                                    affine_lps_to_ras=affine_lps_to_ras,
+                                    ),
+            ConvertPointsToBoxesd(keys=[point_key], box_key=box_key),      
+            ClipBoxToImaged(
+                box_keys=box_key,
+                label_keys=[label_key],
+                box_ref_image_keys=image_key,
+                remove_empty=True,
+            ),
+            DeleteItemsd(keys=[label_mask_key, point_key, "image_meta_dict", "image_meta_dict_meta_dict"]),
+            EnsureTyped(keys=[image_key, box_key], dtype=torch.float32),
+        ])
+
     return train_transform
 
 def get_val_transforms(

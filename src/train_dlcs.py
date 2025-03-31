@@ -89,6 +89,7 @@ if __name__ == "__main__":
     affine_lps_to_ras = False
 
     train_transform = get_train_transforms(
+        augment=config.augment,
         patch_size=config.patch_size,
         batch_size=config.crop_batch_size,
         image_key=config.image_key,
@@ -194,19 +195,12 @@ if __name__ == "__main__":
 
     coco_metric = COCOMetric(classes=["malignant", "benign"], iou_list=[0.1, 0.5, 0.75], iou_range=[0.5, 0.95, 0.05], max_detection=[100])
     optimizer.zero_grad()
-
-    
     
     # ------------- Training loop -------------
     for epoch in range(config.epochs):
         logger.info(f"Epoch {epoch + 1}/{config.epochs}")
         train_pbar = tqdm(train_dl,  total=len(train_dl))
-        for batch_data in train_pbar: # single epoch
-            # inputs = [
-            #         batch_data_i["image"].squeeze(0).to(device)
-            #         for batch_data_i in batched_data
-            #     ]
-            
+        for batch_data in train_pbar: # single epoch            
             inputs = [
                 batch_data_ii["image"].to(device) for batch_data_i in batch_data for batch_data_ii in batch_data_i
             ]
@@ -220,11 +214,7 @@ if __name__ == "__main__":
             ]
             logger.debug(f"Inputs type: {type(inputs)} - Single-item type: {type(inputs[0])}")
             logger.debug(f"Inputs shape: {[input.shape for input in inputs]}")
-            
-            # targets = [ # box and labels
-            #     dict(label=batch_data_i["label"].squeeze(0).to(device),box=batch_data_i["box"].squeeze(0).to(device),)
-            #     for batch_data_i in batched_data
-            # ]
+
             
             logger.debug(f"Targets type: {type(targets)} - Single-item type: {type(targets[0])}")
             logger.debug(f"Targets shape: {[target['box'].shape for target in targets]}")
@@ -263,7 +253,8 @@ if __name__ == "__main__":
         # save model on wandb
         if config.use_wandb:
             wandb.save(os.path.join(config.checkpoint_dir, config.last_model_save_path),
-                       base_path="checkpoints")
+                       base_path="checkpoints"
+                       )
 
         # ------------- Validation for model selection -------------
         if (epoch+1) % config.validate_every == 0:
