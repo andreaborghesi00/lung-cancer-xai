@@ -12,7 +12,7 @@ from tqdm import tqdm
 import wandb
 
 from sklearn.model_selection import train_test_split
-
+from monai.metrics import compute_fp_tp_probs_nd
 
 # MONAI imports
 from monai.apps.detection.networks.retinanet_detector import RetinaNetDetector
@@ -108,13 +108,16 @@ if __name__ == "__main__":
         gt_box_mode=config.gt_box_mode,
         )
     
-    pids = annotations["patient-id"].unique()
-    logger.info(f"Unique patients: {len(pids)}")
+    pids = annotations["patient-id"].unique().tolist()
+    benign_pids = annotations[annotations['Malignant_lbl'] == 1]["patient-id"].unique().tolist()
+    malignant_pids = annotations[annotations['Malignant_lbl'] == 0]["patient-id"].unique().tolist()
+    y = [1 if pid in benign_pids else 0 for pid in pids] # 1 if the patient has at least a benign nodule, 0 otherwise. Used to stratify the split
+    logger.info(f"Unique patients: {len(pids)}\nOf which {len(benign_pids)} are benign and {len(malignant_pids)} are malignant")
 
     # split into train and val
-    train_pids, val_pids = train_test_split(pids, test_size=0.1)
+    train_pids, val_pids = train_test_split(pids, test_size=0.2, stratify=y)
     
-    logger.info(f"Train patients: {len(train_pids)} | Val patients: {len(val_pids)}")
+    logger.info(f"Train patients: {len(train_pids)} [{len([i for i in train_pids if i in malignant_pids])} | {len([i for i in train_pids if i in benign_pids])}] | Val patients: {len(val_pids)} [{len([i for i in val_pids if i in malignant_pids])} | {len([i for i in val_pids if i in benign_pids])}]")
     
     train_annotations = annotations[annotations["patient-id"].isin(train_pids)]
     train_annotations.reset_index(drop=True, inplace=True)
@@ -317,4 +320,3 @@ if __name__ == "__main__":
             
             gc.collect()
             detector.train()
-            
