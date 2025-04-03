@@ -24,7 +24,7 @@ class ModelConfig:
     returned_layers: List[int] = field(default_factory=lambda: [1,2])
     nms_thresh: float = 0.22
     score_thresh: float = 0.02
-    spacing: List[float] = field(default_factory=lambda: [0.703125, 0.703125, 1.25])
+    spacing: List[float] = field(default_factory=lambda: [0.703125, 0.703125, 0.625])
     
     # Training hyperparameters
     augment: bool = False
