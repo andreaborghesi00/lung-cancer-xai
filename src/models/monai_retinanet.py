@@ -17,17 +17,24 @@ def _create_anchor_generator(returned_layers, base_anchor_shapes):
         base_anchor_shapes=base_anchor_shapes,
     )
 
-def _build_backbone(n_input_channels, conv1_t_stride):
+def _build_backbone(n_input_channels, conv1_t_stride, pretrained=True):
     """Build ResNet backbone network."""
     conv1_t_size = [max(7, 2 * s + 1) for s in conv1_t_stride]  # kernel size must be odd
-    return resnet.ResNet(
-        block=resnet.ResNetBottleneck,
-        layers=[3, 4, 6, 3],
-        block_inplanes=resnet.get_inplanes(),
-        n_input_channels=n_input_channels,
-        conv1_t_stride=conv1_t_stride,
-        conv1_t_size=conv1_t_size,
-    )
+    if pretrained:
+        net = resnet.resnet50(pretrained=True, progress=True, conv1_t_size=conv1_t_size, conv1_t_stride=conv1_t_stride, n_input_channels=n_input_channels)
+    else:
+        net = resnet.ResNet(
+            block=resnet.ResNetBottleneck,
+            layers=[3, 4, 6, 3],
+            block_inplanes=resnet.get_inplanes(),
+            n_input_channels=n_input_channels,
+            conv1_t_stride=conv1_t_stride,
+            conv1_t_size=conv1_t_size,
+        )
+    
+        # resnet._load_state_dict(model=net, model_name="resnet50", dataset23=True)
+    
+    return net 
 
 def _build_feature_extractor(backbone, spatial_dims, returned_layers):
     """Build feature extractor with FPN."""
