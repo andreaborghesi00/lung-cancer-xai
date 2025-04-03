@@ -3,6 +3,7 @@ from typing import List, Dict, Any, Tuple
 import yaml
 import os
 from pathlib import Path
+import random
 import logging
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class ModelConfig:
     scaler_growth_interval: int = 2000
     
     # Dataset parameters
+    split_seed: int = field(default_factor=lambda: random.randint(0, 10000))
     patch_size: Tuple[int, int, int] = (192, 192, 72)
     image_key: str = "image"
     box_key: str = "box"

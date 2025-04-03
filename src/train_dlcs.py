@@ -1,65 +1,18 @@
 import gc
 import logging
 import os
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
 from torch.amp import GradScaler, autocast
-from torch.nn.parallel import DistributedDataParallel as DDP
 from tqdm import tqdm
 import wandb
 
 from sklearn.model_selection import train_test_split
-from monai.metrics import compute_fp_tp_probs_nd
 
 # MONAI imports
-from monai.apps.detection.networks.retinanet_detector import RetinaNetDetector
-from monai.apps.detection.networks.retinanet_network import (
-    RetinaNet,
-    resnet_fpn_feature_extractor,
-)
-from monai.apps.detection.transforms.box_ops import convert_box_to_mask
-from monai.apps.detection.transforms.dictionary import (
-    AffineBoxToImageCoordinated,
-    AffineBoxToWorldCoordinated,
-    BoxToMaskd,
-    ClipBoxToImaged,
-    ConvertBoxModed,
-    ConvertBoxToStandardModed,
-    MaskToBoxd,
-    StandardizeEmptyBoxd,
-)
-from monai.apps.detection.utils.anchor_utils import AnchorGeneratorWithAnchorShape
-from monai.config import KeysCollection
 from monai.data import box_utils
-from monai.networks.nets import resnet
-from monai.transforms import (
-    Compose,
-    EnsureChannelFirstd,
-    EnsureTyped,
-    Lambdad,
-    LoadImaged,
-    Orientationd,
-    RandCropByPosNegLabeld,
-    DeleteItemsd,
-    apply_transform,
-    RandRotated,
-    RandAdjustContrastd,
-    RandGaussianNoised,
-    RandGaussianSmoothd,
-    RandRotated,
-    RandScaleIntensityd,
-    RandShiftIntensityd,
-    RandCropByPosNegLabeld,
-    RandZoomd,
-    RandFlipd,
-    RandRotate90d
-)
-from monai.transforms.spatial.dictionary import ConvertBoxToPointsd, ConvertPointsToBoxesd
-from monai.transforms.utility.dictionary import ApplyTransformToPointsd
-from monai.utils.type_conversion import convert_data_type
 
 from monai.apps.detection.metrics.coco import COCOMetric
 from monai.apps.detection.metrics.matching import matching_batch
@@ -67,7 +20,7 @@ from monai.apps.detection.metrics.matching import matching_batch
 # Local imports
 from config.config_3d import get_config
 from data.dlcs_dataset import DLCSDataset
-from data.dlcs_preprocessing import GenerateBoxMask, GenerateExtendedBoxMask, get_train_transforms, get_val_transforms
+from data.dlcs_preprocessing import get_train_transforms, get_val_transforms
 # from models.checkpointed_resnet import CheckpointedResNet
 import utils.utils as utils
 import models.monai_retinanet as rn
@@ -115,7 +68,7 @@ if __name__ == "__main__":
     logger.info(f"Unique patients: {len(pids)}\nOf which {len(benign_pids)} are benign and {len(malignant_pids)} are malignant")
 
     # split into train and val
-    train_pids, val_pids = train_test_split(pids, test_size=0.2, stratify=y)
+    train_pids, val_pids = train_test_split(pids, test_size=0.2, stratify=y, random_state=config.split_seed)
     
     logger.info(f"Train patients: {len(train_pids)} [{len([i for i in train_pids if i in malignant_pids])} | {len([i for i in train_pids if i in benign_pids])}] | Val patients: {len(val_pids)} [{len([i for i in val_pids if i in malignant_pids])} | {len([i for i in val_pids if i in benign_pids])}]")
     
