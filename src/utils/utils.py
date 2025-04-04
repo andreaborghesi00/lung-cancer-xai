@@ -6,7 +6,7 @@ import torch
 from typing import Tuple, Union
 from PIL import Image
 from pathlib import Path
-
+from typing import Optional
 
 def roi_overlay(image, roi, color=(255, 0, 0), lw=2):
     x, y, w, h = roi
@@ -64,3 +64,28 @@ def to_numpy(data: Union[torch.Tensor, np.ndarray, None]) -> Union[np.ndarray, N
         return data
     else:
         raise TypeError(f"Input data must be a torch.Tensor, np.ndarray, or None, but got {type(data)}")
+    
+def visualize_sample_slice(image: np.ndarray, pred_boxes: np.ndarray, pred_scores: np.ndarray, epoch: int, gt_boxes: np.ndarray = None, save_dir: Optional[str] = None):
+    depth = image.shape[-1]
+    
+    plt.figure(figsize=(10, 10))
+    plt.imshow(image[0, :, :, depth//2], cmap="gray") # show the middle slice
+    plt.axis('off')
+    for box, score in zip(pred_boxes, pred_scores):
+        x1, y1, z1, x2, y2, z2 = box
+        w = x2 - x1
+        h = y2 - y1
+        plt.gca().add_patch(plt.Rectangle((y1, x1), w, h, linewidth=1.5, edgecolor='r', facecolor='none'))
+        plt.text(y1, x1-10, str((score)), color='r')
+
+    if gt_boxes is not None:
+        for gt_box in gt_boxes:
+            x1, y1, z1, x2, y2, z2 = gt_box
+            w = x2 - x1
+            h = y2 - y1
+            plt.gca().add_patch(plt.Rectangle((y1, x1), w, h, linewidth=1.5, edgecolor='g', facecolor='none'))
+        
+    if save_dir is not None:
+        plt.savefig(Path(save_dir) / f"sample_{epoch}_slice_{depth//2}.png")
+    else:
+        plt.savefig(f"sample_{epoch}_slice_{depth//2}.png")
