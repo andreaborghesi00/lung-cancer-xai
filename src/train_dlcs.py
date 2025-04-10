@@ -13,17 +13,19 @@ from sklearn.model_selection import train_test_split
 
 # MONAI imports
 from monai.data import box_utils
-
+from monai.engines.evaluator import SupervisedEvaluator
 from monai.apps.detection.metrics.coco import COCOMetric
 from monai.apps.detection.metrics.matching import matching_batch
 
 # Local imports
 from config.config_3d import get_config
 from data.dlcs_dataset import DLCSDataset
-from data.dlcs_preprocessing import get_train_transforms, get_val_transforms
+from data.dlcs_preprocessing import get_train_transforms, get_val_transforms, get_train_transforms_nifti, get_val_transforms_nifti
 # from models.checkpointed_resnet import CheckpointedResNet
 import utils.utils as utils
 import models.monai_retinanet as rn
+
+from pathlib import Path
 
 if __name__ == "__main__":
     config = get_config()
@@ -35,13 +37,13 @@ if __name__ == "__main__":
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  
     torch.backends.cudnn.benchmark = True 
-    torch.set_num_threads(8)
+    torch.set_num_threads(4)
 
     annotations = pd.read_csv(config.annotations_path)
 
     affine_lps_to_ras = False
 
-    train_transform = get_train_transforms(
+    train_transform = get_train_transforms_nifti(
         augment=config.augment,
         patch_size=config.patch_size,
         batch_size=config.crop_batch_size,
@@ -54,7 +56,7 @@ if __name__ == "__main__":
         gt_box_mode=config.gt_box_mode,
     )
     
-    val_transform = get_val_transforms(
+    val_transform = get_val_transforms_nifti(
         image_key=config.image_key,
         box_key=config.box_key,
         label_key=config.label_key,
@@ -81,8 +83,11 @@ if __name__ == "__main__":
     train_ds = DLCSDataset(train_annotations, config.data_dir, transform=train_transform)
     val_ds = DLCSDataset(val_annotations, config.data_dir, transform=val_transform)
     
-    train_dl = train_ds.get_loader(shuffle=True, num_workers=config.dl_workers, batch_size=config.dl_batch_size) # careful with batch size
-    val_dl = val_ds.get_loader(shuffle=False, num_workers=config.dl_workers, batch_size=1)
+    # train_dl = train_ds.get_loader(shuffle=True, num_workers=config.dl_workers, batch_size=config.dl_batch_size) # careful with batch size
+    # val_dl = val_ds.get_loader(shuffle=False, num_workers=config.dl_workers, batch_size=1)
+
+    train_dl = train_ds.get_monai_loader(shuffle=True, num_workers=config.dl_workers, batch_size=config.dl_batch_size) # careful with batch size
+    val_dl = val_ds.get_monai_loader(shuffle=False, num_workers=config.dl_workers, batch_size=1)
     
     
     detector = rn.create_retinanet_detector(
@@ -92,6 +97,7 @@ if __name__ == "__main__":
         n_input_channels=config.n_input_channels,
         base_anchor_shapes=config.base_anchor_shapes,
         conv1_t_stride=config.conv1_t_stride,
+        num_classes=1
     )
     scaler = GradScaler("cuda", init_scale=config.scaler_init_scale, growth_interval=config.scaler_growth_interval)
     
@@ -149,7 +155,8 @@ if __name__ == "__main__":
         wandb.watch(detector.network)
         wandb.config.update(config.__dict__)
 
-    coco_metric = COCOMetric(classes=["malignant", "benign"], iou_list=[0.1, 0.5, 0.75], iou_range=[0.5, 0.95, 0.05], max_detection=[100])
+    # coco_metric = COCOMetric(classes=["malignant", "benign"], iou_list=[0.1, 0.5, 0.75], iou_range=[0.5, 0.95, 0.05], max_detection=[100])
+    coco_metric = COCOMetric(classes=["nodule"], iou_list=[0.1, 0.5, 0.75], iou_range=[0.5, 0.95, 0.05], max_detection=[100])
     optimizer.zero_grad()
     
     # ------------- Training loop -------------
@@ -186,29 +193,37 @@ if __name__ == "__main__":
                     logger.debug(f"Box Reg loss: {outputs[detector.box_reg_key].item()} | Cls loss: {outputs[detector.cls_key].item()}")
                     logger.debug(f"Total Loss: {loss.item()}")
                     
-                    
-                    scaler.scale(loss).backward()
-                    if not torch.isinf(loss).any() and not torch.isnan(loss).any():
-                        scaler.step(optimizer)
-                        scaler.update()
-                    else:
-                        logger.info("Loss is inf or nan, skipping step")
-                        continue
-                    
-                    # optimizer.zero_grad()
-                    losses = {"tot": loss.item(), "cls": outputs[detector.cls_key].item(), "reg": outputs[detector.box_reg_key].item()}
-                    if config.use_wandb:
-                        wandb.log(losses)
-                    train_pbar.set_postfix(losses)
+                scaler.scale(loss).backward()
+                if not torch.isinf(loss).any() and not torch.isnan(loss).any():
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    logger.info("Loss is inf or nan, skipping step")
+                    continue
+                
+                # optimizer.zero_grad()
+                losses = {"tot": loss.item(), "cls": outputs[detector.cls_key].item(), "reg": outputs[detector.box_reg_key].item()}
+                if config.use_wandb:
+                    wandb.log(losses)
+                train_pbar.set_postfix(losses)
         if config.use_wandb:
             wandb.log({"learning_rate": optimizer.param_groups[0]["lr"]})
         scheduler.step()            
-        # save model
+        # save model, optimizer and scheduler
         torch.jit.save(detector.network, os.path.join(config.checkpoint_dir, config.last_model_save_path))
+        torch.save(optimizer.state_dict(), os.path.join(config.checkpoint_dir, config.optimizer_save_path))
+        torch.save(scheduler.state_dict(), os.path.join(config.checkpoint_dir, config.scheduler_save_path))
         
         # save model on wandb
         if config.use_wandb:
             wandb.save(os.path.join(config.checkpoint_dir, config.last_model_save_path),
+                       base_path="checkpoints"
+                       )
+            # save optimizer and scheduler state
+            wandb.save(os.path.join(config.checkpoint_dir, config.optimizer_save_path),
+                       base_path="checkpoints"
+                       )
+            wandb.save(os.path.join(config.checkpoint_dir, config.scheduler_save_path),
                        base_path="checkpoints"
                        )
 
