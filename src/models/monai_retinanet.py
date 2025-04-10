@@ -21,7 +21,7 @@ def _build_backbone(n_input_channels, conv1_t_stride, pretrained=True):
     """Build ResNet backbone network."""
     conv1_t_size = [max(7, 2 * s + 1) for s in conv1_t_stride]  # kernel size must be odd
     if pretrained:
-        net = resnet.resnet50(pretrained=True, progress=True, conv1_t_size=conv1_t_size, conv1_t_stride=conv1_t_stride, n_input_channels=n_input_channels)
+        net = resnet.resnet50(pretrained=True, progress=True, conv1_t_size=conv1_t_size, conv1_t_stride=conv1_t_stride, n_input_channels=n_input_channels, feed_forward=False, shortcut_type="B", bias_downsample=False)
     else:
         net = resnet.ResNet(
             block=resnet.ResNetBottleneck,
@@ -36,13 +36,13 @@ def _build_backbone(n_input_channels, conv1_t_stride, pretrained=True):
     
     return net 
 
-def _build_feature_extractor(backbone, spatial_dims, returned_layers):
+def _build_feature_extractor(backbone, spatial_dims, returned_layers, pretrained=False, trainable_backbone_layers=None):
     """Build feature extractor with FPN."""
     return resnet_fpn_feature_extractor(
         backbone=backbone,
         spatial_dims=spatial_dims,
-        pretrained_backbone=False,
-        trainable_backbone_layers=None,
+        pretrained_backbone=pretrained,
+        trainable_backbone_layers=trainable_backbone_layers,
         returned_layers=returned_layers,
     )
 
@@ -62,7 +62,7 @@ def _build_network(feature_extractor, spatial_dims, num_classes, num_anchors, re
 def _configure_detector(detector,
                         score_thresh,
                         nms_thresh,
-                        sw_roi_size=[512, 512, 320],
+                        sw_roi_size=[512, 512, 192],
                         sw_overlap=0.10,
                         sw_batch_size=1,
                         ):
@@ -101,15 +101,17 @@ def _create_retinanet_from_scratch(
     spatial_dims=3,
     returned_layers=[1, 2],
     base_anchor_shapes=[[6, 8, 4], [8, 6, 5], [10, 10, 6]],
-    conv1_t_stride=[2, 2, 1]
+    conv1_t_stride=[2, 2, 1],
+    pretrained=False,
+    trainable_backbone_layers=None,
 ):
     """Create a new RetinaNet model from scratch."""
     # Build anchor generator
     anchor_generator = _create_anchor_generator(returned_layers, base_anchor_shapes)
     
     # Build network components
-    backbone = _build_backbone(n_input_channels, conv1_t_stride)
-    feature_extractor = _build_feature_extractor(backbone, spatial_dims, returned_layers)
+    backbone = _build_backbone(n_input_channels, conv1_t_stride, pretrained=pretrained)
+    feature_extractor = _build_feature_extractor(backbone, spatial_dims, returned_layers, pretrained=pretrained, trainable_backbone_layers=trainable_backbone_layers)
     num_anchors = anchor_generator.num_anchors_per_location()[0]
     net = _build_network(feature_extractor, spatial_dims, num_classes, num_anchors, returned_layers)
     
@@ -123,7 +125,7 @@ def load_retinanet_from_checkpoint(checkpoint_path):
 def create_retinanet_detector(
     device,
     pretrained=False,
-    pretrained_path=None,
+    # pretrained_path=None,
     n_input_channels=1,
     num_classes=2,
     spatial_dims=3,
@@ -132,25 +134,24 @@ def create_retinanet_detector(
     conv1_t_stride=[2, 2, 1],
     score_thresh=0.02,
     nms_thresh=0.22,
-    debug=False
+    debug=False,
+    trainable_backbone_layers=None,
 ):
     """Create and configure a RetinaNet detector."""
     # Build anchor generator
     anchor_generator = _create_anchor_generator(returned_layers, base_anchor_shapes)
     
     # Get network based on whether we're using a pretrained model or not
-    if not pretrained:
-        net, anchor_generator = _create_retinanet_from_scratch(
-            n_input_channels=n_input_channels,
-            num_classes=num_classes,
-            spatial_dims=spatial_dims,
-            returned_layers=returned_layers,
-            base_anchor_shapes=base_anchor_shapes,
-            conv1_t_stride=conv1_t_stride
-        )
-    else:
-        model_path = pretrained_path or "checkpoints/RetinaNet/retinanet_22_epochs.pt"
-        net = load_retinanet_from_checkpoint(model_path)
+    net, anchor_generator = _create_retinanet_from_scratch(
+        n_input_channels=n_input_channels,
+        num_classes=num_classes,
+        spatial_dims=spatial_dims,
+        returned_layers=returned_layers,
+        base_anchor_shapes=base_anchor_shapes,
+        conv1_t_stride=conv1_t_stride,
+        pretrained=pretrained,
+        trainable_backbone_layers=trainable_backbone_layers,
+    )
 
     # Build and configure detector
     detector = RetinaNetDetector(network=net, anchor_generator=anchor_generator, debug=debug).to(device)

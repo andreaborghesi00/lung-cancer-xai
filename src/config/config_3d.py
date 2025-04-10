@@ -18,7 +18,8 @@ class ModelConfig:
     n_input_channels: int = 1
     num_classes: int = 2
     spatial_dims: int = 3
-    pretrained: bool = False
+    pretrained: bool = True
+    trainable_backbone_layers: int = 3
     base_anchor_shapes: List[List[int]] = field(default_factory=lambda: [[6,8,4],[8,6,5],[10,10,6]])
     conv1_t_stride: List[int] = field(default_factory=lambda: [2,2,1])
     returned_layers: List[int] = field(default_factory=lambda: [1,2])
@@ -62,7 +63,8 @@ class ModelConfig:
     model_checkpoint: str = field(default=None)
     visualization_dir: str = "visualizations"
     visualization_experiment_name: str = "bbox_and_gradcam"
-    
+    optimizer_save_path: str = field(default="optimizer_state_last.pt")
+    scheduler_save_path: str = field(default="scheduler_state_last.pt")
     
     def validate(self):
         def validate(self):
