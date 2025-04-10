@@ -8,16 +8,12 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from monai.transforms import (
-    EnsureChannelFirst,
-    Compose,
-    RandRotate90,
-    Resize,
-    ScaleIntensity,
     apply_transform,
     Randomizable
 )
 from monai.utils import MAX_SEED, get_seed
 from monai.data.utils import no_collation
+from monai.data import DataLoader as MonaiDataLoader
 
 """
 we expect the annotations to be processed already, i.e. the nodule coordinates are in the same space as the CT,
@@ -58,11 +54,11 @@ class DLCSDataset(Dataset, Randomizable):
         pid = self.pids[idx]
         patient_annotations = self.annotations[self.annotations["patient-id"] == pid]
         patient_annotations.reset_index(drop=True, inplace=True)
-        filename = f"{self.data_dir}/{pid}.npy"
+        filename = f"{self.data_dir}/{pid}.nii.gz"
         
         boxes = torch.tensor(patient_annotations[['coordX', 'coordY', 'coordZ', 'w', 'h', 'd']].values, dtype=torch.float32)
         labels = torch.tensor(patient_annotations["Malignant_lbl"].values, dtype=torch.long)
-        # labels_zero = torch.zeros_like(labels)
+        labels_zero = torch.zeros_like(labels)
         
         # apply transform
         if isinstance(self.transform, Randomizable):
@@ -70,7 +66,7 @@ class DLCSDataset(Dataset, Randomizable):
         data = {
             "image": filename,
             "box": boxes,
-            "label": labels,
+            "label": labels_zero,
             }
         
         transformed_data = apply_transform(self.transform, data)
@@ -91,3 +87,13 @@ class DLCSDataset(Dataset, Randomizable):
                             persistent_workers=True,
                             collate_fn=no_collation
                             )
+    def get_monai_loader(self, shuffle: bool = False, num_workers:int=1, batch_size=1):
+        return MonaiDataLoader(
+                self,
+                batch_size=batch_size,
+                shuffle=shuffle,
+                num_workers=num_workers,
+                pin_memory=torch.cuda.is_available(),
+                collate_fn=no_collation,
+                persistent_workers=True,
+            )   
