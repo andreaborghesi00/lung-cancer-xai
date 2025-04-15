@@ -93,11 +93,12 @@ if __name__ == "__main__":
     detector = rn.create_retinanet_detector(
         device=device,
         pretrained=config.pretrained,
-        pretrained_path=None,
+        # pretrained_path=None,
         n_input_channels=config.n_input_channels,
         base_anchor_shapes=config.base_anchor_shapes,
         conv1_t_stride=config.conv1_t_stride,
-        num_classes=1
+        num_classes=1,
+        trainable_backbone_layers=config.trainable_backbone_layers
     )
     scaler = GradScaler("cuda", init_scale=config.scaler_init_scale, growth_interval=config.scaler_growth_interval)
     
@@ -163,6 +164,9 @@ if __name__ == "__main__":
     for epoch in range(config.epochs):
         logger.info(f"Epoch {epoch + 1}/{config.epochs}")
         train_pbar = tqdm(train_dl,  total=len(train_dl))
+        avg_tot_loss = 0
+        avg_cls_loss = 0
+        avg_reg_loss = 0
         for batch_data in train_pbar: # single epoch            
             inputs = [
                 batch_data_ii["image"].to(device) for batch_data_i in batch_data for batch_data_ii in batch_data_i
@@ -192,33 +196,47 @@ if __name__ == "__main__":
                     
                     logger.debug(f"Box Reg loss: {outputs[detector.box_reg_key].item()} | Cls loss: {outputs[detector.cls_key].item()}")
                     logger.debug(f"Total Loss: {loss.item()}")
-                    
+                
+                avg_tot_loss += loss.item()
+                avg_cls_loss += outputs[detector.cls_key].item()
+                avg_reg_loss += outputs[detector.box_reg_key].item()
+                
                 scaler.scale(loss).backward()
-                if not torch.isinf(loss).any() and not torch.isnan(loss).any():
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    logger.info("Loss is inf or nan, skipping step")
-                    continue
+                scaler.step(optimizer)
+                scaler.update()
                 
                 # optimizer.zero_grad()
                 losses = {"tot": loss.item(), "cls": outputs[detector.cls_key].item(), "reg": outputs[detector.box_reg_key].item()}
                 if config.use_wandb:
                     wandb.log(losses)
                 train_pbar.set_postfix(losses)
+                
+        avg_tot_loss /= len(train_dl)
+        avg_cls_loss /= len(train_dl)
+        avg_reg_loss /= len(train_dl)
+        
         if config.use_wandb:
             wandb.log({"learning_rate": optimizer.param_groups[0]["lr"]})
+            wandb.log({"avg_tot_loss": avg_tot_loss})
+            wandb.log({"avg_cls_loss": avg_cls_loss})
+            wandb.log({"avg_reg_loss": avg_reg_loss})
+            wandb.log({"epoch": epoch})
+            
         scheduler.step()            
         # save model, optimizer and scheduler
-        torch.jit.save(detector.network, os.path.join(config.checkpoint_dir, config.last_model_save_path))
+        # torch.jit.save(detector.network, os.path.join(config.checkpoint_dir, config.last_model_save_path))
         torch.save(optimizer.state_dict(), os.path.join(config.checkpoint_dir, config.optimizer_save_path))
         torch.save(scheduler.state_dict(), os.path.join(config.checkpoint_dir, config.scheduler_save_path))
+        torch.save(detector.network.state_dict(), os.path.join(config.checkpoint_dir, f"dict_{config.last_model_save_path}"))
         
         # save model on wandb
         if config.use_wandb:
             wandb.save(os.path.join(config.checkpoint_dir, config.last_model_save_path),
                        base_path="checkpoints"
                        )
+            wandb.save(os.path.join(config.checkpoint_dir, f"dict_{config.last_model_save_path}"),
+                        base_path="checkpoints"
+                        )
             # save optimizer and scheduler state
             wandb.save(os.path.join(config.checkpoint_dir, config.optimizer_save_path),
                        base_path="checkpoints"
@@ -238,7 +256,6 @@ if __name__ == "__main__":
             val_outputs_all = []
             val_targets_all = []
             val_pbar = tqdm(val_dl, total=len(val_dl))
-            
             with torch.no_grad():
                 for val_data in val_pbar:
                     # val_inputs = [val_data.pop("image").squeeze(0).to(device)] # we pop so that val data now contains only boxes and labels
@@ -283,8 +300,6 @@ if __name__ == "__main__":
             if config.use_wandb:
                 wandb.log(val_epoch_metric_dict)
             logger.info(f"Validation metrics: {val_epoch_metric_dict}")
-            
-            
             
             gc.collect()
             detector.train()

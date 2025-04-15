@@ -17,7 +17,7 @@ def _create_anchor_generator(returned_layers, base_anchor_shapes):
         base_anchor_shapes=base_anchor_shapes,
     )
 
-def _build_backbone(n_input_channels, conv1_t_stride, pretrained=True):
+def _build_backbone(n_input_channels, conv1_t_stride, pretrained=False):
     """Build ResNet backbone network."""
     conv1_t_size = [max(7, 2 * s + 1) for s in conv1_t_stride]  # kernel size must be odd
     if pretrained:
@@ -49,20 +49,18 @@ def _build_feature_extractor(backbone, spatial_dims, returned_layers, pretrained
 def _build_network(feature_extractor, spatial_dims, num_classes, num_anchors, returned_layers):
     """Build RetinaNet network."""
     size_divisible = [s * 2 * 2 ** max(returned_layers) for s in feature_extractor.body.conv1.stride]
-    return torch.jit.script(
-        RetinaNet(
+    return RetinaNet(
             spatial_dims=spatial_dims,
             num_classes=num_classes,
             num_anchors=num_anchors,
             feature_extractor=feature_extractor,
             size_divisible=size_divisible,
         )
-    )
 
 def _configure_detector(detector,
                         score_thresh,
                         nms_thresh,
-                        sw_roi_size=[512, 512, 192],
+                        sw_roi_size=[512, 512, 96],
                         sw_overlap=0.10,
                         sw_batch_size=1,
                         ):
