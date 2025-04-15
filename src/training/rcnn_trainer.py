@@ -10,7 +10,7 @@ import torch.optim as optim
 from pathlib import Path
 from tqdm import tqdm
 import wandb
-from config.config import get_config
+from config.config_2d import get_config
 from utils.metrics import iou_loss
 import numpy as np
 

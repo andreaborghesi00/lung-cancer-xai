@@ -19,7 +19,7 @@ class ModelConfig:
     num_classes: int = 2
     spatial_dims: int = 3
     pretrained: bool = True
-    trainable_backbone_layers: int = 3
+    trainable_backbone_layers: int = 2
     base_anchor_shapes: List[List[int]] = field(default_factory=lambda: [[6,8,4],[8,6,5],[10,10,6]])
     conv1_t_stride: List[int] = field(default_factory=lambda: [2,2,1])
     returned_layers: List[int] = field(default_factory=lambda: [1,2])

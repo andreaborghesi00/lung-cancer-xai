@@ -4,7 +4,7 @@ from PIL import Image
 import config
 from typing import Tuple, List, Optional, Callable, Any, Union
 from dataclasses import dataclass, field
-from config.config import get_config
+from config.config_2d import get_config
 import logging
 import os
 from pathlib import Path

@@ -1,6 +1,6 @@
 import logging
 import utils.utils as utils
-from config.config import get_config
+from config.config_2d import get_config
 import torch
 from sklearn.model_selection import train_test_split
 from data.rcnn_preprocessing import ROIPreprocessor

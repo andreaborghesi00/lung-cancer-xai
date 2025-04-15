@@ -2,7 +2,7 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 import logging
 from utils.utils import setup_logging
-from config.config import get_config
+from config.config_2d import get_config
 from typing import Optional, Callable, List
 from PIL import Image
 from data.rcnn_preprocessing import ROIPreprocessor

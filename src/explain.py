@@ -1,6 +1,6 @@
 import logging
 import random
-from config.config import get_config
+from config.config_2d import get_config
 from data.rcnn_dataset import DynamicRCNNDataset
 from data.tomography_dataset import DynamicTomographyDataset
 from training.rcnn_trainer import RCNNTrainer
@@ -42,7 +42,7 @@ if __name__ == "__main__":
     
     X_test, y_test = preprocessor.load_paths_labels(test_ids)
     test_ds = DynamicRCNNDataset(X_test, y_test, transform=model.get_transform(), augment=False)
-    test_dl = test_ds.get_loader()
+    test_dl = test_ds.get_loader(batch_size=1)
     test_ds_tomo = DynamicTomographyDataset(test_ids, transform=model.get_transform())
     test_dl_tomo = test_ds_tomo.get_loader(batch_size=1)
     
@@ -58,83 +58,83 @@ if __name__ == "__main__":
                             use_wandb=config.use_wandb
                           )
     
-    logger.info("Testing model - Tomography aware")
-    metrics = trainer.validation_outlier_detection(test_dl_tomo)
-    logger.info(f"Test metrics: {metrics}")
+    # logger.info("Testing model - Tomography aware")
+    # metrics = trainer.validation_outlier_detection(test_dl_tomo)
+    # logger.info(f"Test metrics: {metrics}")
     
-    logger.info("Testing model - Non tomography aware")
-    metrics = trainer.validation(test_dl)
-    logger.info(f"Test metrics: {metrics}")
+    # logger.info("Testing model - Non tomography aware")
+    # metrics = trainer.validation(test_dl)
+    # logger.info(f"Test metrics: {metrics}")
     
-    exit()
+    # exit()
     
     visualizer = Visualizer()    
 
     num_samples = len(test_ds) # all of them
-    # sample_indices = random.sample(range(len(test_ds)), num_samples)
+    sample_indices = random.sample(range(len(test_ds)), num_samples)
     
     logger.info(f"Generating visualizations for {num_samples} random test samples")
     model.eval()
     
     # logger.info(model.model.backbone)
-    # inverse_layer_nums = [1]
-    # target_layers = [[list(model.model.backbone.body.children())[-(i+1)]] for i in inverse_layer_nums] # get last layer for RCNN model, unfortunately this is model specific
-    # # apply the explainer to the test samples
-    # explainers = [CAMExplainer(model=model, target_layer=target_layer, target_class=1, cam_class=GradCAM) for target_layer in target_layers]
-    # logger.info(f"Explainers initialized, length: {len(explainers)}")
+    inverse_layer_nums = [1]
+    target_layers = [[list(model.model.backbone.body.children())[-(i+1)]] for i in inverse_layer_nums] # get last layer for RCNN model, unfortunately this is model specific
+    # apply the explainer to the test samples
+    explainers = [CAMExplainer(model=model, target_layer=target_layer, target_class=1, cam_class=GradCAM) for target_layer in target_layers]
+    logger.info(f"Explainers initialized, length: {len(explainers)}")
     id = 0
-    for tomos, targets in tqdm(test_dl_tomo):
-        tomos = torch.stack(tomos).to(device)
+    for image, target in tqdm(test_dl_tomo):
+        # image = torch.stack(image).to(device)
 
-        results, original, formatted_targets = trainer._process_tomography_with_outlier_detection(tomos, targets)
+        # results, original, formatted_targets = trainer._process_tomography_with_outlier_detection(tomos, targets)
+        # confidence_threshold = 0.5
+        # skips = [skip for _, _, skip in results]
+        # pred_boxes = [pred['boxes'][pred['scores'] > confidence_threshold] for pred, _, _ in results]
+        # scores = [pred['scores'][pred['scores'] > confidence_threshold] for pred, _, _ in results]
+        # true_boxes = [target[0]['boxes'] for target in formatted_targets]
+        
+        # visualizer.display_tomo_bboxes(
+        #     tomo = tomos[0], # i don't like this
+        #     boxes = pred_boxes,
+        #     true_boxes = true_boxes,
+        #     scores = scores,
+        #     save_dir = Path(str(id)),
+        #     skips = skips
+        # )
+        # id +=1
+        image = image[0].squeeze(0).to(device)
+        
+        # get prediction to display predicted boxes
+        with torch.no_grad():
+            prediction = model(image)[0]
+        
+        # filter predictions by confidence
         confidence_threshold = 0.5
-        skips = [skip for _, _, skip in results]
-        pred_boxes = [pred['boxes'][pred['scores'] > confidence_threshold] for pred, _, _ in results]
-        scores = [pred['scores'][pred['scores'] > confidence_threshold] for pred, _, _ in results]
-        true_boxes = [target[0]['boxes'] for target in formatted_targets]
+        mask = prediction['scores'] > confidence_threshold
+        pred_boxes = prediction['boxes'][mask]
+        scores = prediction['scores'][mask]        
         
-        visualizer.display_tomo_bboxes(
-            tomo = tomos[0], # i don't like this
-            boxes = pred_boxes,
-            true_boxes = true_boxes,
-            scores = scores,
-            save_dir = Path(str(id)),
-            skips = skips
-        )
-        id +=1
+        true_boxes = target[0]['boxes'] # ground truth boxes
         
-        
-    #     # get prediction to display predicted boxes
-    #     with torch.no_grad():
-    #         prediction = model(image)[0]
-        
-    #     # filter predictions by confidence
-    #     confidence_threshold = 0.5
-    #     mask = prediction['scores'] > confidence_threshold
-    #     pred_boxes = prediction['boxes'][mask]
-    #     scores = prediction['scores'][mask]        
-        
-    #     true_boxes = target['boxes'] # ground truth boxes
-        
-    #     image_numpy = image.detach().squeeze(0).cpu().numpy().transpose(1, 2, 0) # convert to numpy and convert from (C, H, W) to (H, W, C)
-    #     for layer_idx, target_layer in enumerate(target_layers):
-    #         explainer = explainers[layer_idx]
-    #         try:
-    #             grayscale_cam = explainer.explain(image=image, labels=[1], bboxes=[target['boxes'][0].cpu().numpy()])
-    #         except Exception as e:
-    #             logger.error(f"Failed to generate CAM for sample {idx} at layer {layer_idx}: {str(e)}")
-    #             continue
+        image_numpy = image.detach().squeeze(0).cpu().numpy().transpose(1, 2, 0) # convert to numpy and convert from (C, H, W) to (H, W, C)
+        for layer_idx, target_layer in enumerate(target_layers):
+            explainer = explainers[layer_idx]
+            try:
+                grayscale_cam = explainer.explain(image=image, labels=[1], bboxes=[target['boxes'][0].cpu().numpy()])
+            except Exception as e:
+                logger.error(f"Failed to generate CAM for sample {id} at layer {layer_idx}: {str(e)}")
+                continue
                 
-    #         visualization = explainer.visualize(image=image_numpy, cam=grayscale_cam[0])
-    #         visualizer.display_bboxes(
-    #             input=visualization,
-    #             pred_boxes=pred_boxes,
-    #             true_boxes=true_boxes,
-    #             scores=scores,
-    #             filename=f"sample_{idx}_L{layer_idx}.png"
-    #         )
+            visualization = explainer.visualize(image=image_numpy, cam=grayscale_cam[0])
+            visualizer.display_bboxes(
+                input=visualization,
+                pred_boxes=pred_boxes,
+                true_boxes=true_boxes,
+                scores=scores,
+                filename=f"sample_{id}_L{layer_idx}.png"
+            )
     
-        # with torch.no_grad():
+    #     with torch.no_grad():
     #     for idx in tqdm(sample_indices):
     #         # Get sample
     #         image_path = X_test[idx]

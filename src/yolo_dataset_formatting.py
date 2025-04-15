@@ -1,6 +1,6 @@
 import logging
 import random
-from config.config import get_config
+from config.config_2d import get_config
 from data.rcnn_dataset import DynamicRCNNDataset
 import utils.utils as utils
 from models.faster_rcnn import FasterRCNNMobileNet, FasterRCNNResnet50
@@ -9,7 +9,7 @@ from utils.visualization import Visualizer
 from tqdm import tqdm
 import torch
 from pathlib import Path
-from data.preprocessing import ROIPreprocessor
+from data.rcnn_preprocessing import ROIPreprocessor
 from sklearn.model_selection import train_test_split
 import gc
 from PIL import Image

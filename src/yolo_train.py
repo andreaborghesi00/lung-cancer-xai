@@ -1,5 +1,5 @@
 from ultralytics import YOLO
-from config.config import get_config
+from config.config_2d import get_config
 import logging
 import utils.utils as utils 
 import torch

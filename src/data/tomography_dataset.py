@@ -2,10 +2,10 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 import logging
 from utils.utils import setup_logging
-from config.config import get_config
+from config.config_2d import get_config
 from typing import Optional, Callable, List, Tuple, Union
 from PIL import Image
-from data.preprocessing import ROIPreprocessor
+from data.rcnn_preprocessing import ROIPreprocessor
 import numpy as np
 from torchvision.transforms import v2 as T
 
@@ -38,7 +38,7 @@ class DynamicTomographyDataset(Dataset):
             image = self.transform(image)
         return image
     
-    def _load_slices_and_boxes(self, tomography_id: Tuple[str, str]) -> torch.Tensor:
+    def _load_slices_and_boxes(self, tomography_id: Tuple[str, str]) -> Tuple[torch.Tensor, torch.Tensor]:
         paths, boxes = self.preprocessor.load_paths_labels(tomography_id)
         slices = []
         for path in paths:
@@ -84,12 +84,19 @@ class DynamicTomographyDataset(Dataset):
     
     def __getitem__(self, idx):
         slices, boxes = self._load_slices_and_boxes(self.tomography_ids[idx])
-        boxes = self._compress_labels(boxes)
-        target = {
-            "boxes": boxes.view(-1, 4), # ensures shape (N, 4)
-            "labels": torch.ones(len(boxes), dtype=torch.int64) # all boxes are tumors
-        }
-        return slices, target
+        # boxes = self._compress_labels(boxes)
+        # target = {
+        #     "boxes": boxes.view(-1, 4), # ensures shape (N, 4)
+        #     "labels": torch.ones(len(boxes), dtype=torch.int64) # all boxes are tumors
+        # }
+        targets = [
+            {
+                "boxes": box.view(-1, 4),
+                "labels": torch.ones(1, dtype=torch.int64)
+            }
+            for box in boxes
+        ]
+        return slices, targets
 
 # for testing purposes only
 if __name__ == "__main__":
