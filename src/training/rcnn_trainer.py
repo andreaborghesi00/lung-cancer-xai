@@ -13,7 +13,7 @@ import wandb
 from config.config_2d import get_config
 from utils.metrics import iou_loss
 import numpy as np
-
+from torch.amp import GradScaler, autocast
 
 class RCNNTrainer():
     def __init__(self,
@@ -22,13 +22,17 @@ class RCNNTrainer():
                  scheduler: Optional[optim.lr_scheduler._LRScheduler] = None, 
                  device: str = "cuda" if torch.cuda.is_available() else "cpu",
                  checkpoint_dir: Optional[str] = None,
-                 use_wandb: bool = False
+                 use_wandb: bool = False,
+                 amp = True,
                  ):
             
         self.logger = logging.getLogger(self.__class__.__name__)
         setup_logging(level=logging.DEBUG)
         self.config = get_config()
-                        
+        self.amp = amp
+        if self.amp:
+            self.scaler = GradScaler()
+            self.logger.info(f"Using mixed precision training")
         self.device = device
 
         self.model = model
@@ -120,6 +124,10 @@ class RCNNTrainer():
         checkpoint_path = self.checkpoint_dir / self.model.__class__.__name__ / f"checkpoint_epoch_{epoch}.pt"
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(checkpoint, checkpoint_path)
+        
+        if self.use_wandb:
+            wandb.save(checkpoint_path)
+        
         self.logger.info(f"Checkpoint saved at {checkpoint_path}")
         
 
@@ -154,15 +162,25 @@ class RCNNTrainer():
             targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
             
             self.optimizer.zero_grad()
-            loss_dict = self.model(images, targets) # the model internally processes the loss
             
-            losses = sum(loss for loss in loss_dict.values())
-            losses.backward()
+            if self.amp:
+                with autocast("cuda"):
+                    loss_dict = self.model(images, targets)
+                    losses = sum(loss for loss in loss_dict.values())
+                
+                self.scaler.scale(losses).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                
+            else:
+                loss_dict = self.model(images, targets) # the model internally processes the loss
+                losses = sum(loss for loss in loss_dict.values())
+                losses.backward()
+                self.optimizer.step()
             
             if self.use_wandb:
                 wandb.log({"train_loss": losses.item()})
             
-            self.optimizer.step()
             total_loss += losses.item()
             
             loss_dict["total_loss"] = losses

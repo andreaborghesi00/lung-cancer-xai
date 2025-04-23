@@ -82,5 +82,46 @@ class DynamicRCNNDataset(Dataset):
             batch_size=self.config.batch_size if batch_size is None else batch_size,
             shuffle=shuffle,
             num_workers=self.config.dl_workers if num_workers is None else num_workers,
-            collate_fn=lambda x: tuple(zip(*x)) # custom collate function to handle the target dictionary
+            collate_fn=lambda x: tuple(zip(*x)), # custom collate function to handle the target dictionary,
+            persistent_workers=True,
+            prefetch_factor=2,
+            pin_memory=True
+        )
+        
+class DynamicResampledNLST(Dataset):
+    def __init__(self, image_paths: List[str], boxes: torch.Tensor, transform: Optional[Callable] = None, augment: bool = True):
+        self.config = get_config()
+        self.image_paths = image_paths
+        self.boxes = boxes
+        self.transform = transform
+        
+    def __len__(self):
+        return len(self.image_paths)
+
+
+    def _load_image(self, image_path: str) -> torch.Tensor:
+        image = np.load(image_path) # although our ct-scans are 1-channel only, the transforms require 3 channels
+        image = Image.fromarray(image)
+        image = self.transform(image)     
+          
+        return image
+
+    def __getitem__(self, idx):
+        target = {
+            "boxes": self.boxes[idx].view(-1, 4), # ensures shape (N, 4)
+            "labels": torch.ones(len(self.boxes[idx]), dtype=torch.int64) # all boxes are tumors
+        }      
+        image = self._load_image(self.image_paths[idx])
+        return image, target
+    
+    def get_loader(self, shuffle: bool = False, num_workers: int = None, batch_size: int = None):
+        return DataLoader(
+            self,
+            batch_size=self.config.batch_size if batch_size is None else batch_size,
+            shuffle=shuffle,
+            num_workers=self.config.dl_workers if num_workers is None else num_workers,
+            collate_fn=lambda x: tuple(zip(*x)), # custom collate function to handle the target dictionary,
+            persistent_workers=True,
+            prefetch_factor=2,
+            pin_memory=True
         )

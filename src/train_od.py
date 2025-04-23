@@ -4,7 +4,7 @@ from config.config_2d import get_config
 import torch
 from sklearn.model_selection import train_test_split
 from data.rcnn_preprocessing import ROIPreprocessor
-from data.rcnn_dataset import StaticRCNNDataset, DynamicRCNNDataset
+from data.rcnn_dataset import StaticRCNNDataset, DynamicRCNNDataset, DynamicResampledNLST
 from data.tomography_dataset import DynamicTomographyDataset
 import models.faster_rcnn as frcnn
 from training.rcnn_trainer import RCNNTrainer
@@ -23,14 +23,8 @@ if __name__ == "__main__":
     logger.info("Initializing model")
     model = frcnn.FasterRCNNMobileNet()
     logger.info(f"Model initialized {model.__class__.__name__} with {utils.count_parameters(model)} trainable parameters")
-    
-    
-    # if torch.cuda.device_count() > 1:
-    #     logger.info(f"Using {torch.cuda.device_count()} GPUs for training")
-    #     model = torch.nn.DataParallel(model, [0, 1])  # Multi-GPU support
 
     model = model.to(device)
-    logger.debug(model.module if isinstance(model, torch.nn.DataParallel) else model)
     
     # prepare data
     preprocessor = ROIPreprocessor()
@@ -50,9 +44,9 @@ if __name__ == "__main__":
     
     # datasets and dataloaders
     logger.info("Creating datasets and dataloaders")
-    transform = model.module.get_transform() if isinstance(model, torch.nn.DataParallel) else model.get_transform()
-    train_ds = DynamicRCNNDataset(X_train, y_train, transform=transform)
-    val_ds = DynamicRCNNDataset(X_val, y_val, transform=transform)
+    transform = model.get_transform()
+    train_ds = DynamicResampledNLST(X_train, y_train, transform=transform)
+    val_ds = DynamicResampledNLST(X_val, y_val, transform=transform)
     # val_ds = DynamicTomographyDataset(val_ids, transform=transform)
     
     logger.info("Creating dataloaders")
@@ -74,10 +68,11 @@ if __name__ == "__main__":
         model=model,
         optimizer=optimizer,
         scheduler=scheduler,
-
         device=device,
         checkpoint_dir=config.checkpoint_dir,
-        use_wandb=config.use_wandb
+        use_wandb=config.use_wandb,
+        amp=True,
+        
     )
     
     logger.info("Training the model")
