@@ -1,7 +1,7 @@
 import logging
 import random
 from config.config_2d import get_config
-from data.rcnn_dataset import DynamicRCNNDataset
+from data.rcnn_dataset import DynamicRCNNDataset, DynamicResampledNLST
 from data.tomography_dataset import DynamicTomographyDataset
 from training.rcnn_trainer import RCNNTrainer
 import utils.utils as utils
@@ -41,10 +41,10 @@ if __name__ == "__main__":
     _, test_ids = train_test_split(valtest_ids, test_size=(1-config.val_test_split_ratio), random_state=config.random_state)
     
     X_test, y_test = preprocessor.load_paths_labels(test_ids)
-    test_ds = DynamicRCNNDataset(X_test, y_test, transform=model.get_transform(), augment=False)
+    test_ds = DynamicResampledNLST(X_test, y_test, transform=model.get_transform(), augment=False)
     test_dl = test_ds.get_loader(batch_size=1)
-    test_ds_tomo = DynamicTomographyDataset(test_ids, transform=model.get_transform())
-    test_dl_tomo = test_ds_tomo.get_loader(batch_size=1)
+    # test_ds_tomo = DynamicTomographyDataset(test_ids, transform=model.get_transform())
+    # test_dl_tomo = test_ds_tomo.get_loader(batch_size=1)
     
     del valtest_ids, test_ids, unique_tomographies
     gc.collect()
@@ -55,7 +55,7 @@ if __name__ == "__main__":
                             scheduler=None,
                             device=device,
                             checkpoint_dir=config.checkpoint_dir,
-                            use_wandb=config.use_wandb
+                            use_wandb=False # we're not actually training here
                           )
     
     # logger.info("Testing model - Tomography aware")
@@ -77,13 +77,13 @@ if __name__ == "__main__":
     model.eval()
     
     # logger.info(model.model.backbone)
-    inverse_layer_nums = [1]
+    inverse_layer_nums = [1,2,3,9]
     target_layers = [[list(model.model.backbone.body.children())[-(i+1)]] for i in inverse_layer_nums] # get last layer for RCNN model, unfortunately this is model specific
     # apply the explainer to the test samples
     explainers = [CAMExplainer(model=model, target_layer=target_layer, target_class=1, cam_class=GradCAM) for target_layer in target_layers]
     logger.info(f"Explainers initialized, length: {len(explainers)}")
     id = 0
-    for image, target in tqdm(test_dl_tomo):
+    for image, target in tqdm(test_dl):
         # image = torch.stack(image).to(device)
 
         # results, original, formatted_targets = trainer._process_tomography_with_outlier_detection(tomos, targets)
@@ -101,8 +101,8 @@ if __name__ == "__main__":
         #     save_dir = Path(str(id)),
         #     skips = skips
         # )
-        # id +=1
-        image = image[0].squeeze(0).to(device)
+        image = torch.stack(image).to(device) # add batch dimension
+        image.requires_grad = True # this is needed for the CAM explainer
         
         # get prediction to display predicted boxes
         with torch.no_grad():
@@ -120,7 +120,8 @@ if __name__ == "__main__":
         for layer_idx, target_layer in enumerate(target_layers):
             explainer = explainers[layer_idx]
             try:
-                grayscale_cam = explainer.explain(image=image, labels=[1], bboxes=[target['boxes'][0].cpu().numpy()])
+                bboxes = target[0]['boxes'].cpu().numpy()[0] 
+                grayscale_cam = explainer.explain(image=image, labels=[1], bboxes=[bboxes])
             except Exception as e:
                 logger.error(f"Failed to generate CAM for sample {id} at layer {layer_idx}: {str(e)}")
                 continue
@@ -133,6 +134,7 @@ if __name__ == "__main__":
                 scores=scores,
                 filename=f"sample_{id}_L{layer_idx}.png"
             )
+        id +=1  
     
     #     with torch.no_grad():
     #     for idx in tqdm(sample_indices):

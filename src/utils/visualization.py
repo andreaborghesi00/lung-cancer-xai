@@ -121,6 +121,7 @@ class Visualizer:
         """
         Visualize predicted and ground truth boxes on the same image
         Args:
+            input: Path to the image or the image as a numpy array (H, W, C)
             image_path: Path to the image or the image as a numpy array
             pred_boxes: Predicted boxes (N, 4) in (x1, y1, x2, y2) format
             true_boxes: Ground truth boxes (M, 4) in (x1, y1, x2, y2) format
@@ -136,13 +137,13 @@ class Visualizer:
         else:
             raise ValueError("Input must be a path to an image or a numpy array")
         
-        image_array = image_array[0] if len(image_array.shape) == 3 else image_array
+        # image_array = image_array[:, :, 0] if len(image_array.shape) == 3 else image_array
         pred_boxes = utils.to_numpy(pred_boxes)
         true_boxes = utils.to_numpy(true_boxes)
         scores = utils.to_numpy(scores)
         
         plt.figure(figsize=figsize)
-        plt.imshow(image_array, cmap='gray')
+        plt.imshow(image_array)
         ax = plt.gca() # get current axes
         
         # Plot predicted boxes in red
