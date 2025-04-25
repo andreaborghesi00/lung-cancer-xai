@@ -4,6 +4,7 @@ import yaml
 import os
 from pathlib import Path
 import logging
+import random
 
 @dataclass(frozen=True)
 class ModelConfig:
@@ -11,7 +12,7 @@ class ModelConfig:
     project_dir: str = field(default=os.path.join(Path(__file__).parent.parent.parent), init=False)
     experiment_name: str = field(default=None)
     notes: str = field(default=None)
-    
+    device: str = field(default="cuda:1")
     # Model architecture
     image_input_channels: int = 1
     num_classes: int = 2
@@ -26,8 +27,9 @@ class ModelConfig:
     use_wandb: bool = True
     train_split_ratio: float = 0.8
     val_test_split_ratio: float = 0.5
-    random_state: int = field(default=None)
+    random_state: int = field(default_factory=lambda: random.randint(0, 10000))
     patience: int = 0
+    augment: bool = False
     # Paths and Logging
     data_path: str = "data/slices_segmentate_png"
     annotation_path: str = "data/annotations.csv"

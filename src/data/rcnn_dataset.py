@@ -8,6 +8,8 @@ from PIL import Image
 from data.rcnn_preprocessing import ROIPreprocessor
 import numpy as np
 from torchvision.transforms import v2 as T
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 # import torchvision.transforms as T
 
 class StaticRCNNDataset(Dataset):
@@ -89,29 +91,60 @@ class DynamicRCNNDataset(Dataset):
         )
         
 class DynamicResampledNLST(Dataset):
-    def __init__(self, image_paths: List[str], boxes: torch.Tensor, transform: Optional[Callable] = None, augment: bool = True):
+    def __init__(self, image_paths: List[str], boxes: torch.Tensor, augment: bool = True):
         self.config = get_config()
         self.image_paths = image_paths
         self.boxes = boxes
-        self.transform = transform
+        self.augment= augment
+        
+        if self.augment:
+            self.albu_transforms = A.Compose([
+                # Spatial transformations
+                A.HorizontalFlip(p=0.5),
+                A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.5),
+                
+                # Brightness/contrast adjustments (subtle for medical images)
+                A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.5),
+                
+                # Noise and blur (simulates different scan qualities)
+                A.GaussianBlur(blur_limit=(3, 5), p=0.3),
+                A.MultiplicativeNoise(multiplier=(0.9, 1.1), p=0.3),                
+                
+                # CT-specific augmentations
+                A.CLAHE(clip_limit=2.0, p=0.3),  # Enhances contrast locally,
+                
+            ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
         
     def __len__(self):
         return len(self.image_paths)
 
 
-    def _load_image(self, image_path: str) -> torch.Tensor:
-        image = np.load(image_path) # although our ct-scans are 1-channel only, the transforms require 3 channels
-        image = Image.fromarray(image)
-        image = self.transform(image)     
-          
+    def _load_image(self, image_path: str) -> np.ndarray:
+        image = np.load(image_path)     
         return image
 
     def __getitem__(self, idx):
         target = {
             "boxes": self.boxes[idx].view(-1, 4), # ensures shape (N, 4)
-            "labels": torch.ones(len(self.boxes[idx]), dtype=torch.int64) # all boxes are tumors
         }      
+        target["labels"] = torch.ones(len(target["boxes"]), dtype=torch.int64) # all boxes are tumors
         image = self._load_image(self.image_paths[idx])
+        
+        if self.augment:
+            boxes_np = target["boxes"].numpy()
+            labels_np = target["labels"].numpy()
+
+            transformed = self.albu_transforms(
+                image=image,
+                bboxes=boxes_np,
+                labels=labels_np
+            )
+            
+            image = torch.tensor(transformed["image"], dtype=torch.float32).unsqueeze(0) # add channel dimension
+            target["boxes"] = torch.tensor(transformed["bboxes"], dtype=torch.float32)
+            target["labels"] = torch.tensor(transformed["labels"], dtype=torch.int64) 
+        else:
+            image = torch.tensor(image, dtype=torch.float32).unsqueeze(0)
         return image, target
     
     def get_loader(self, shuffle: bool = False, num_workers: int = None, batch_size: int = None):

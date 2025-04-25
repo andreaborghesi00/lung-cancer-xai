@@ -17,7 +17,7 @@ if __name__ == "__main__":
     config.validate()
     logger = logging.getLogger(__name__)
     utils.setup_logging(level=logging.INFO)
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")    
+    device = torch.device(config.device if torch.cuda.is_available() else "cpu")    
     
     # model 
     logger.info("Initializing model")
@@ -44,9 +44,9 @@ if __name__ == "__main__":
     
     # datasets and dataloaders
     logger.info("Creating datasets and dataloaders")
-    transform = model.get_transform()
-    train_ds = DynamicResampledNLST(X_train, y_train, transform=transform)
-    val_ds = DynamicResampledNLST(X_val, y_val, transform=transform)
+    # transform = model.get_transform()
+    train_ds = DynamicResampledNLST(X_train, y_train, augment=config.augment)
+    val_ds = DynamicResampledNLST(X_val, y_val, augment=False)
     # val_ds = DynamicTomographyDataset(val_ids, transform=transform)
     
     logger.info("Creating dataloaders")
@@ -94,7 +94,7 @@ if __name__ == "__main__":
     test_metrics = trainer.validation(test_dl) 
     logger.info(f"Test metrics: {test_metrics}")
     
-    test_ds_tomography = DynamicTomographyDataset(test_ids, transform=model.get_transform())
+    test_ds_tomography = DynamicTomographyDataset(test_ids, transform=model.get_transform(), augment=False)
     test_dl_tomography = test_ds_tomography.get_loader()
-    test_metrics_tomography = trainer.tomography_aware_validation(test_dl_tomography)
+    test_metrics_tomography = trainer.validation(test_dl_tomography)
     logger.info(f"Test metrics tomography: {test_metrics_tomography}")

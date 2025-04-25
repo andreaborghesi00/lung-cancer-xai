@@ -131,7 +131,7 @@ class ROIPreprocessor():
                     valid_tomography_ids.append((pid, dcm_series))
                     break
         
-        self.logger.debug(f"Found {len(valid_tomography_ids)} valid tomography ids out of {len(tomography_ids)}")
+        self.logger.info(f"Found {len(valid_tomography_ids)} valid tomography ids out of {len(tomography_ids)}")
         
         return valid_tomography_ids
 
@@ -156,7 +156,7 @@ class ROIPreprocessor():
         
     def load_paths_labels(self, tomography_id: Union[Tuple[str, str], List[Tuple[str, str]]]) -> Tuple[List[str], torch.Tensor]:
         """
-        Load slice paths and bboxes (xyxy format) of the specified tomography id (pid, dcm_series)
+        Load slice paths and bboxes (xywh to xyxy format) of the specified tomography id (pid, dcm_series)
         """
         if isinstance(tomography_id, tuple):
             tomography_id = [tomography_id]
@@ -166,7 +166,7 @@ class ROIPreprocessor():
         missed_paths = 0
         for pid, dcm_series in tomography_id:
             for _, row in self.annotation_df[(self.annotation_df["pid"] == pid) & (self.annotation_df["dcm_series"] == dcm_series)].iterrows():
-                image_path = os.path.join(self.config.data_path, row["uid_slice"] + '.png')
+                image_path = os.path.join(self.config.data_path, row["uid_slice"] + '.npy')
                 self.logger.debug(f"Loading image at path {image_path}")
                 if not Path(image_path).exists():
                     missed_paths += 1
@@ -181,7 +181,7 @@ class ROIPreprocessor():
             self.logger.error("No images loaded, check the data path and annotation file")
             raise ValueError("No images loaded")
 
-        self.logger.debug(f"Loaded {len(image_paths)} images, missed {missed_paths}")
+        self.logger.info(f"Loaded {len(image_paths)} images, missed {missed_paths}")
         self.logger.debug(f"Data shape: {len(image_paths)}, Labels shape: {len(bboxes)}")
         
         bbox_tensor = torch.stack(bboxes)
