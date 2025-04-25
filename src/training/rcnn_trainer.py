@@ -68,6 +68,7 @@ class RCNNTrainer():
             "mAP@50": MeanAveragePrecision(iou_thresholds=[0.5], box_format='xyxy').to(self.device),
             "mAP@75": MeanAveragePrecision(iou_thresholds=[0.75], box_format='xyxy').to(self.device),
             "mAP@50:95": MeanAveragePrecision(iou_thresholds=np.arange(0.5, 1.0, 0.05).tolist(), box_format='xyxy').to(self.device),
+            "mAP@10": MeanAveragePrecision(iou_thresholds=[0.1], box_format='xyxy').to(self.device),
             # "mse": MeanSquaredError().to(self.device)
         }
     
