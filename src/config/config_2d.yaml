@@ -1,26 +1,41 @@
 project_name: "dev_roi"
-experiment_name: "MN augment"
-notes: "trying out data augmentation"
-use_wandb: False
+experiment_name: "Resampled masked"
+notes: "mixed precision training, masked, and resampled dataset. pretrained (imagenet) MobileNet as backbone."
+        # Augmentations are the following:                
+        # A.HorizontalFlip(p=0.5),
+        # A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.5),
+        
+        # A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.5),
+        
+        # A.GaussianBlur(blur_limit=(3, 5), p=0.3),
+        # A.MultiplicativeNoise(multiplier=(0.9, 1.1), p=0.3),                
+        
+        # A.CLAHE(clip_limit=2.0, p=0.3)"
+use_wandb: True
+augment: False
+device: "cuda:1"
+random_state: 123
 
 image_input_channels: 1
 output_dim: 4
 
-dl_workers: 1
+dl_workers: 4
 
-batch_size: 1
-epochs: 100
-learning_rate: 0.0001
+batch_size: 16
+epochs: 200
+learning_rate: 0.001
 train_split_ratio: 0.7
 val_test_split_ratio: 0.60 # test ratio is 1 - val_test_split_ratio
-random_state: 123
-patience: 15
+patience: 25
 
-data_path: "data/slices_segmentate_png"
-annotation_path: "data/annotations.csv"
+data_path: "/gwdata/users/aborghesi/NLST/resampled_slices_masked/"
+annotation_path: "/gwdata/users/aborghesi/NLST/resampled_masked_annotations.csv"
 log_dir: "logs"
 checkpoint_dir: "checkpoints"
 visualization_dir: "visualizations"
-# visualization_experiment_name: "bbox_and_gradcam"
+visualization_experiment_name: "resampled_extended_dataset/custom/"
 
-model_checkpoint: "FasterRCNNMobileNet/checkpoint_epoch_best.pt"
+model_checkpoint: "FasterRCNNMobileNet/checkpoint_epoch_best copy.pt"
+
+# no transform
+# .369  |  
