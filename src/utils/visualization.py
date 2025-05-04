@@ -116,7 +116,8 @@ class Visualizer:
         scores: torch.Tensor,
         filename: str = None,
         figsize: Tuple[int, int] = (12, 8),
-        skip: bool = False
+        skip: bool = False,
+        title: str = None,
     ) -> None:
         """
         Visualize predicted and ground truth boxes on the same image
@@ -145,7 +146,8 @@ class Visualizer:
         plt.figure(figsize=figsize)
         plt.imshow(image_array)
         ax = plt.gca() # get current axes
-        
+        if title is not None:
+            plt.title(title)
         # Plot predicted boxes in red
         # for i, box_score in enumerate(zip(pred_boxes, scores if scores is not None else [None]*len(pred_boxes))):
         scores = scores if scores is not None else [None]*len(pred_boxes)
