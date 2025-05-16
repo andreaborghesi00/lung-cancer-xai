@@ -4,13 +4,16 @@ from config.config_2d import get_config
 import torch
 from sklearn.model_selection import train_test_split
 from data.rcnn_preprocessing import ROIPreprocessor
-from data.rcnn_dataset import StaticRCNNDataset, DynamicRCNNDataset, DynamicResampledNLST
+from data.rcnn_dataset import StaticRCNNDataset, DynamicRCNNDataset, DynamicResampledNLST, DynamicResampledDLCS
 from data.tomography_dataset import DynamicTomographyDataset
 import models.faster_rcnn as frcnn
 from training.rcnn_trainer import RCNNTrainer
 import gc
 import torch.nn.parallel
 from torch.nn.parallel import DistributedDataParallel as DDP
+import pandas as pd
+import torch
+import numpy as np
 
 if __name__ == "__main__":
     config = get_config()
@@ -21,14 +24,24 @@ if __name__ == "__main__":
     
     # model 
     logger.info("Initializing model")
-    model = frcnn.FasterRCNNMobileNet()
+    # model = frcnn.FasterRCNNMobileNet()
+    model = frcnn.FasterRCNNEfficientNet()
+    # model = frcnn.FasterRCNNResnet50()
     logger.info(f"Model initialized {model.__class__.__name__} with {utils.count_parameters(model)} trainable parameters")
 
     model = model.to(device)
     
     # prepare data
-    preprocessor = ROIPreprocessor()
-    unique_tomographies = preprocessor.load_tomography_ids()
+    
+    ## NLST
+    # preprocessor = ROIPreprocessor()
+    # unique_tomographies = preprocessor.load_tomography_ids()
+    
+    ## DLCS
+    annotations = pd.read_csv(config.annotation_path)
+    unique_tomographies = annotations['pid'].unique()
+    
+    logger.info(f"Unique tomographies: {len(unique_tomographies)}")
     
     # split unique tomographies into train, validation and test
     logger.info("Splitting data into train, validation and test sets")
@@ -37,24 +50,51 @@ if __name__ == "__main__":
 
     # load paths and labels
     logger.info("Loading paths and labels")
-    X_train, y_train = preprocessor.load_paths_labels(train_ids)
-    X_val, y_val = preprocessor.load_paths_labels(val_ids)
-    logger.info(f"Train data shape: {X_train.shape}, Train labels shape: {y_train.shape}")
-    logger.info(f"Validation data shape: {X_val.shape}, Validation labels shape: {y_val.shape}")
+    
+    ## NLST
+    # X_train, y_train = preprocessor.load_paths_labels(train_ids)
+    # X_val, y_val = preprocessor.load_paths_labels(val_ids)
+    
+    ## DLCS
+    X_train = annotations[annotations['pid'].isin(train_ids)]['path'].values
+    X_train = np.array(X_train)
+    boxes_train = annotations[annotations['pid'].isin(train_ids)][["bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2"]].values
+    boxes_train = torch.tensor(boxes_train, dtype=torch.float32)
+    class_train = annotations[annotations['pid'].isin(train_ids)]['is_benign'].values
+    class_train = torch.tensor(class_train, dtype=torch.float32)
+    
+    X_val = annotations[annotations['pid'].isin(val_ids)]['path'].values
+    X_val = np.array(X_val)
+    boxes_val = annotations[annotations['pid'].isin(val_ids)][["bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2"]].values
+    boxes_val = torch.tensor(boxes_val, dtype=torch.float32)
+    class_val = annotations[annotations['pid'].isin(val_ids)]['is_benign'].values    
+    class_val = torch.tensor(class_val, dtype=torch.float32)
+    
+    logger.info(f"Train data shape: {X_train.shape}, Train labels shape: {boxes_train.shape}")
+    logger.info(f"Validation data shape: {X_val.shape}, Validation labels shape: {boxes_val.shape}")
     
     # datasets and dataloaders
     logger.info("Creating datasets and dataloaders")
     # transform = model.get_transform()
-    train_ds = DynamicResampledNLST(X_train, y_train, augment=config.augment)
-    val_ds = DynamicResampledNLST(X_val, y_val, augment=False)
+     
+    ## NLST
+    # train_ds = DynamicResampledNLST(X_train, y_train, augment=config.augment)
+    # val_ds = DynamicResampledNLST(X_val, y_val, augment=False)
     # val_ds = DynamicTomographyDataset(val_ids, transform=transform)
     
-    logger.info("Creating dataloaders")
+    # logger.info("Creating dataloaders")
+    # train_dl = train_ds.get_loader(shuffle=True, batch_size=config.batch_size)
+    # val_dl = val_ds.get_loader(batch_size = config.batch_size) # this loader gets whole tomographies, hence the smaller batch size
+  
+    ## DLCS
+    train_ds = DynamicResampledDLCS(X_train, boxes_train, class_train, augment=config.augment, transform=model.get_transform())
+    val_ds = DynamicResampledDLCS(X_val, boxes_val, class_val, augment=False, transform=model.get_transform())
+    
     train_dl = train_ds.get_loader(shuffle=True, batch_size=config.batch_size)
     val_dl = val_ds.get_loader(batch_size = config.batch_size) # this loader gets whole tomographies, hence the smaller batch size
-  
+    
     # free memory
-    del X_train, X_val, y_train, y_val, train_ds, val_ds, unique_tomographies, train_ids, val_ids
+    del X_train, X_val, train_ds, val_ds, unique_tomographies, train_ids, val_ids
     gc.collect() # garbage collection 
 
     # optimizer and scheduler
@@ -71,7 +111,7 @@ if __name__ == "__main__":
         device=device,
         checkpoint_dir=config.checkpoint_dir,
         use_wandb=config.use_wandb,
-        amp=True,
+        amp=False,
         
     )
     
@@ -88,13 +128,13 @@ if __name__ == "__main__":
     
     # testing
     logger.info("Testing the model")
-    X_test, y_test = preprocessor.load_paths_labels(test_ids)
-    test_ds = DynamicRCNNDataset(X_test, y_test, transform=model.get_transform())
-    test_dl = test_ds.get_loader()
-    test_metrics = trainer.validation(test_dl) 
-    logger.info(f"Test metrics: {test_metrics}")
+    # X_test, y_test = preprocessor.load_paths_labels(test_ids)
+    # test_ds = DynamicRCNNDataset(X_test, y_test, transform=model.get_transform())
+    # test_dl = test_ds.get_loader()
+    # test_metrics = trainer.validation(test_dl) 
+    # logger.info(f"Test metrics: {test_metrics}")
     
-    test_ds_tomography = DynamicTomographyDataset(test_ids, transform=model.get_transform(), augment=False)
-    test_dl_tomography = test_ds_tomography.get_loader()
-    test_metrics_tomography = trainer.validation(test_dl_tomography)
-    logger.info(f"Test metrics tomography: {test_metrics_tomography}")
+    # test_ds_tomography = DynamicTomographyDataset(test_ids, transform=model.get_transform(), augment=False)
+    # test_dl_tomography = test_ds_tomography.get_loader()
+    # test_metrics_tomography = trainer.validation(test_dl_tomography)
+    # logger.info(f"Test metrics tomography: {test_metrics_tomography}")
