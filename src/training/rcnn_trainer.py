@@ -15,6 +15,10 @@ from utils.metrics import iou_loss
 import numpy as np
 from torch.amp import GradScaler, autocast
 
+from monai.data import box_utils
+from monai.apps.detection.metrics.coco import COCOMetric
+from monai.apps.detection.metrics.matching import matching_batch
+
 class RCNNTrainer():
     def __init__(self,
                  model: nn.Module, 
@@ -31,7 +35,7 @@ class RCNNTrainer():
         self.config = get_config()
         self.amp = amp
         if self.amp:
-            self.scaler = GradScaler()
+            self.scaler = GradScaler(init_scale=2 ** 11)
             self.logger.info(f"Using mixed precision training")
         self.device = device
 
@@ -64,11 +68,11 @@ class RCNNTrainer():
     
     def _init_metrics(self) -> Dict[str, Any]:
         return {
-            "mAP@5:95": MeanAveragePrecision(iou_thresholds=np.arange(0.05, 1.0, 0.05).tolist()).to(self.device), 
-            "mAP@50": MeanAveragePrecision(iou_thresholds=[0.5], box_format='xyxy').to(self.device),
-            "mAP@75": MeanAveragePrecision(iou_thresholds=[0.75], box_format='xyxy').to(self.device),
-            "mAP@50:95": MeanAveragePrecision(iou_thresholds=np.arange(0.5, 1.0, 0.05).tolist(), box_format='xyxy').to(self.device),
-            "mAP@10": MeanAveragePrecision(iou_thresholds=[0.1], box_format='xyxy').to(self.device),
+            "mAP@5:95": MeanAveragePrecision(iou_thresholds=np.arange(0.05, 1.0, 0.05).tolist(), extended_summary=True).to(self.device), 
+            "mAP@50": MeanAveragePrecision(iou_thresholds=[0.5], box_format='xyxy', extended_summary=True).to(self.device),
+            "mAP@75": MeanAveragePrecision(iou_thresholds=[0.75], box_format='xyxy', extended_summary=True).to(self.device),
+            "mAP@50:95": MeanAveragePrecision(iou_thresholds=np.arange(0.5, 1.0, 0.05).tolist(), box_format='xyxy', extended_summary=True).to(self.device),
+            "mAP@10": MeanAveragePrecision(iou_thresholds=[0.1], box_format='xyxy', extended_summary=True).to(self.device),
             # "mse": MeanSquaredError().to(self.device)
         }
     
@@ -164,7 +168,7 @@ class RCNNTrainer():
             
             self.optimizer.zero_grad()
             
-            if self.amp:
+            if self.amp:  
                 with autocast("cuda"):
                     loss_dict = self.model(images, targets)
                     losses = sum(loss for loss in loss_dict.values())
@@ -202,17 +206,22 @@ class RCNNTrainer():
         self.model.eval()
         self._reset_metrics(self.val_metrics)
         pbar = tqdm(dl, desc="Validation")
+        val_outputs_all = []
+        val_targets_all = []
         
         with torch.no_grad():
             for images, targets in pbar:
                 images = [image.to(self.device) for image in images]
                 targets = [{k: v.to(self.device) for k, v in t.items()} for t in targets]
                 
-                formatted_preds = self.model(images) # in eval mode, the model returns the output directly
+                formatted_preds = self.model(images) # in eval mode, the y\o`model returns the output directly
                 
                 formatted_preds = self._format_box_for_map(formatted_preds, is_prediction=True)
                 targets = self._format_box_for_map(targets)
-    
+                
+                val_outputs_all.extend(formatted_preds)
+                val_targets_all.extend(targets)
+                
                 try:
                     # self.val_metrics["mAP@5:95"].update(formatted_preds, targets)
                     for keys in self.val_metrics.keys():
@@ -223,10 +232,31 @@ class RCNNTrainer():
                     self.logger.debug(f"Targets shape: {[t['boxes'].shape for t in targets]}")
                     raise
                 
-                pbar.set_postfix({"mAP@5:95": self.val_metrics["mAP@5:95"].compute()['map'].item()})
+                item = self.val_metrics["mAP@5:95"].compute()
+                pbar.set_postfix({"mAP@5:95": item['map'].item()})
 
         metrics = {k: v.compute()['map'].item() for k, v in self.val_metrics.items()}
-        
+        coco_metric = COCOMetric(classes=["nothing", "nodule"], iou_list=np.arange(.05, 1, .05), iou_range=[0.5, 0.95, 0.05], max_detection=[3])
+        results_metric = matching_batch(
+                iou_fn=box_utils.box_iou,
+                iou_thresholds=coco_metric.iou_thresholds,
+                pred_boxes=[
+                    val_data_i['boxes'].cpu().detach().numpy() for val_data_i in val_outputs_all
+                ],
+                pred_classes=[
+                    val_data_i['labels'].cpu().detach().numpy() for val_data_i in val_outputs_all
+                ],
+                pred_scores=[
+                    val_data_i['scores'].cpu().detach().numpy() for val_data_i in val_outputs_all
+                ],
+                gt_boxes=[val_data_i['boxes'].cpu().detach().numpy() for val_data_i in val_targets_all],
+                gt_classes=[
+                    val_data_i['labels'].cpu().detach().numpy() for val_data_i in val_targets_all
+                ],
+            )
+        val_epoch_metric_dict = coco_metric(results_metric)[0]
+
+        self.logger.info(f"coco metrics: {val_epoch_metric_dict}")
         return metrics
 
     
