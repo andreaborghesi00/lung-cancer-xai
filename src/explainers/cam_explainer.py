@@ -41,9 +41,10 @@ class FasterRCNNBoxScoreTarget:
         The total score is the sum of all the box scores.
     """
 
-    def __init__(self, labels, bounding_boxes, iou_threshold=0.5):
+    def __init__(self, labels, bounding_boxes, scores, iou_threshold=0.5):
         self.labels = labels
         self.bounding_boxes = bounding_boxes
+        self.scores = scores
         self.iou_threshold = iou_threshold
         self.device = torch.device(config.device if torch.cuda.is_available() else "cpu")
 
@@ -53,13 +54,14 @@ class FasterRCNNBoxScoreTarget:
         if len(model_outputs["boxes"]) == 0:
             return output
 
-        for box, label in zip(self.bounding_boxes, self.labels):
+        for box, label, score in zip(self.bounding_boxes, self.labels, self.scores):
             box = torch.Tensor(box[None, :]).to(self.device)
 
             ious = torchvision.ops.box_iou(box, model_outputs["boxes"])
             index = ious.argmax()
             if ious[0, index] > self.iou_threshold and model_outputs["labels"][index] == label:
-                score = ious[0, index] + model_outputs["scores"][index]
+                # score = ious[0, index] + model_outputs["scores"][index]
+                score = ious[0, index] * (1 - (model_outputs["scores"][index] - score)**2)
                 output = output + score
         return output
 
@@ -368,7 +370,7 @@ class CAMExplainer:
         else:
             self.explainer = cam_class(model, target_layers=target_layer, reshape_transform=reshape_transform)
         
-    def explain(self, image: torch.Tensor, labels: Union[int, List[int]], bboxes: List[Dict[str, int]], iou_threshold: int = 0.5) -> Any:
+    def explain(self, image: torch.Tensor, labels: Union[int, List[int]], bboxes: List[Dict[str, int]], scores, iou_threshold: int = 0.5) -> Any:
         # self.model.eval()
         # Debug prints
         self.logger.debug(f"Input image requires_grad: {image.requires_grad}")
@@ -383,13 +385,10 @@ class CAMExplainer:
         if isinstance(labels, int):
             labels = [labels]
 
-        targets = [FasterRCNNBoxScoreTarget(labels, bboxes, iou_threshold=iou_threshold)]
+        targets = [FasterRCNNBoxScoreTarget(labels=labels, bounding_boxes=bboxes, scores=scores , iou_threshold=iou_threshold)]
         cam = self.explainer(input_tensor=image, targets=targets)
         return cam
 
     def visualize(self, image: torch.Tensor, cam: torch.Tensor) -> np.ndarray:
         visualization = show_cam_on_image(image, cam, use_rgb=True)
         return visualization
-
-
-

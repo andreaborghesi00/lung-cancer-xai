@@ -13,6 +13,7 @@ class ModelConfig:
     experiment_name: str = field(default=None)
     notes: str = field(default=None)
     device: str = field(default="cuda:1")
+    amp: bool = field(default=True)  # Automatic Mixed Precision (AMP) for training
     # Model architecture
     image_input_channels: int = 1
     num_classes: int = 2
@@ -30,6 +31,8 @@ class ModelConfig:
     random_state: int = field(default_factory=lambda: random.randint(0, 10000))
     patience: int = 0
     augment: bool = False
+    warmup_epochs: int = 5
+    validate_every: int = 3
     # Paths and Logging
     data_path: str = "data/slices_segmentate_png"
     annotation_path: str = "data/annotations.csv"

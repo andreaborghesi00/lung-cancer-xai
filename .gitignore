@@ -5,8 +5,15 @@ logs/*
 *.pyc
 wandb/*
 visualizations/*
-src/notebooks/scrap.ipynb
 *.pt
 dev_roi/*
 yolo_models/*
 *.ipynb
+*.npy
+*.png
+detr_output/*
+.vscode/*
+*.out
+*.csv
+src/scraps/*
+lightning_logs/*

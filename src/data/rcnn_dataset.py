@@ -103,20 +103,23 @@ class DynamicResampledNLST(Dataset):
             self.albu_transforms = A.Compose([
                 # Spatial transformations
                 A.HorizontalFlip(p=0.5),
-                A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.5),
+                A.ShiftScaleRotate(shift_limit=0.15, scale_limit=0.1, rotate_limit=10, p=0.5),
                 
                 # Brightness/contrast adjustments (subtle for medical images)
                 A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.5),
                 
                 # Noise and blur (simulates different scan qualities)
-                A.GaussianBlur(blur_limit=(3, 5), p=0.3),
-                A.MultiplicativeNoise(multiplier=(0.9, 1.1), p=0.3),                
+                A.GaussianBlur(blur_limit=(3), p=0.3),
+                # A.MultiplicativeNoise(multiplier=(0.9, 1.1), p=0.3),                
                 
                 # CT-specific augmentations
-                A.CLAHE(clip_limit=2.0, p=0.3),  # Enhances contrast locally,
+                A.CLAHE(clip_limit=2.0, p=1.0),  # Enhances contrast locally,
                 
             ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
-        
+        else:
+            self.albu_transforms = A.Compose([
+                A.CLAHE(clip_limit=2.0, p=1.0),  # Enhances contrast locally,
+            ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
     def __len__(self):
         return len(self.image_paths)
 
@@ -137,22 +140,20 @@ class DynamicResampledNLST(Dataset):
         target["labels"] = torch.ones(len(target["boxes"]), dtype=torch.int64) # all boxes are tumors TODO: use zeros rather than ones for one-class classification
 
         image = self._load_image(self.image_paths[idx])
-        image = self.upscale_numpy_image(image, (image.shape[0] * self.upscale_factor, image.shape[1] * self.upscale_factor)) # upscale image by 40%
-        if self.augment:
-            boxes_np = target["boxes"].numpy()
-            labels_np = target["labels"].numpy()
+        # image = self.upscale_numpy_image(image, (image.shape[0] * self.upscale_factor, image.shape[1] * self.upscale_factor)) # upscale image by 40%
+        boxes_np = target["boxes"].numpy()
+        labels_np = target["labels"].numpy()
 
-            transformed = self.albu_transforms(
-                image=image,
-                bboxes=boxes_np,
-                labels=labels_np
-            )
-            
-            image = torch.tensor(transformed["image"], dtype=torch.float32).unsqueeze(0) # add channel dimension
-            target["boxes"] = torch.tensor(transformed["bboxes"], dtype=torch.float32)
-            target["labels"] = torch.tensor(transformed["labels"], dtype=torch.int64) 
-        else:
-            image = torch.tensor(image, dtype=torch.float32).unsqueeze(0)
+        transformed = self.albu_transforms(
+            image=image,
+            bboxes=boxes_np,
+            labels=labels_np
+        )
+        
+        image = torch.tensor(transformed["image"], dtype=torch.float32).unsqueeze(0) # add channel dimension
+        target["boxes"] = torch.tensor(transformed["bboxes"], dtype=torch.float32)
+        target["labels"] = torch.tensor(transformed["labels"], dtype=torch.int64) 
+
         return image, target
     
     def get_loader(self, shuffle: bool = False, num_workers: int = None, batch_size: int = None):
@@ -197,8 +198,8 @@ class DynamicResampledDLCS(Dataset):
                 A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.5),
                 
                 # Noise and blur (simulates different scan qualities)
-                A.GaussianBlur(blur_limit=(3, 5), p=0.3),
-                A.MultiplicativeNoise(multiplier=(0.9, 1.1), p=0.3),                
+                # A.GaussianBlur(blur_limit=(3, 5), p=0.3),
+                # A.MultiplicativeNoise(multiplier=(0.9, 1.1), p=0.3),                
                 
                 # CT-specific augmentations
                 A.CLAHE(clip_limit=2.0, p=1.0),  # Enhances contrast locally,                
@@ -234,8 +235,8 @@ class DynamicResampledDLCS(Dataset):
             )
             
             image = torch.tensor(transformed["image"], dtype=torch.float32)
-            if self.transform:
-                image = self.transform(image)
+            # if self.transform:
+            #     image = self.transform(image)
             image = image.unsqueeze(0) # add channel dimension
             target["boxes"] = torch.tensor(transformed["bboxes"], dtype=torch.float32)
             target["labels"] = torch.tensor(transformed["labels"], dtype=torch.int64)

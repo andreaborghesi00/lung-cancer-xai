@@ -498,7 +498,7 @@ class RCNNTrainer():
         return all_results, all_original_preds, all_targets  
     
          
-    def train(self, train_loader, val_loader, num_epochs: int, patience: int = 5):
+    def train(self, train_loader, val_loader, num_epochs: int, patience: int = 5, validate_every: int = 1):
         """
         Training loop
         """
@@ -510,7 +510,8 @@ class RCNNTrainer():
             self.logger.info(f"Epoch {epoch+1}/{num_epochs}")
             
             train_metrics = self.train_epoch(train_loader) 
-            val_metrics = self.validation(val_loader)
+            if epoch % validate_every == 0:
+                val_metrics = self.validation(val_loader)
             
             if self.scheduler is not None:
                 # self.scheduler.step(val_metrics['mAP@5:95']) # some schedulers may prefer to be called within the batch loop, but for now we'll call it at the end of the epoch

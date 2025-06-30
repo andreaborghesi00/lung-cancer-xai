@@ -118,6 +118,7 @@ class Visualizer:
         figsize: Tuple[int, int] = (12, 8),
         skip: bool = False,
         title: str = None,
+        cmap: str = None,
     ) -> None:
         """
         Visualize predicted and ground truth boxes on the same image
@@ -144,7 +145,7 @@ class Visualizer:
         scores = utils.to_numpy(scores)
         
         plt.figure(figsize=figsize)
-        plt.imshow(image_array)
+        plt.imshow(image_array, cmap=cmap)
         ax = plt.gca() # get current axes
         if title is not None:
             plt.title(title)

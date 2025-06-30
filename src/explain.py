@@ -1,11 +1,14 @@
+import os
+os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
+
 import logging
 import random
 from config.config_2d import get_config
-from data.rcnn_dataset import DynamicRCNNDataset, DynamicResampledNLST
+from data.rcnn_dataset import DynamicRCNNDataset, DynamicResampledNLST, DynamicResampledDLCS
 from data.tomography_dataset import DynamicTomographyDataset
 from training.rcnn_trainer import RCNNTrainer
 import utils.utils as utils
-from models.faster_rcnn import FasterRCNNMobileNet, FasterRCNNResnet50
+from models.faster_rcnn import FasterRCNNMobileNet, FasterRCNNResnet50, FasterRCNNEfficientNetv2s
 from explainers.cam_explainer import CAMExplainer, CustomGradCAM, fasterrcnn_reshape_transform, SSCAM, FasterRCNNBoxScoreTarget
 from utils.visualization import Visualizer
 from tqdm import tqdm
@@ -99,7 +102,8 @@ if __name__ == "__main__":
     logger.info(f"Loading model from checkpoint from {model_path}")
 
     # model = utils.load_model(model_path, FasterRCNNResnet50, device=device)
-    model = utils.load_model(model_path, FasterRCNNMobileNet, device=device)
+    # model = utils.load_model(model_path, FasterRCNNMobileNet, device=device)
+    model = utils.load_model(model_path, FasterRCNNEfficientNetv2s, device=device)
     model.eval()
     
     logger.info(model.model.backbone)
@@ -108,11 +112,12 @@ if __name__ == "__main__":
     preprocessor = ROIPreprocessor()
     unique_tomographies = preprocessor.load_tomography_ids()
     _, valtest_ids = train_test_split(unique_tomographies, test_size=(1-config.train_split_ratio), random_state=config.random_state)
-    # _, test_ids = train_test_split(valtest_ids, test_size=(1-config.val_test_split_ratio), random_state=config.random_state)
-    _, test_ids = train_test_split(valtest_ids, test_size=0.15, random_state=69420)
+    _, test_ids = train_test_split(valtest_ids, test_size=(1-config.val_test_split_ratio), random_state=config.random_state)
+    # _, test_ids = train_test_split(valtest_ids, test_size=0.15, random_state=69420)
     
     X_test, y_test = preprocessor.load_paths_labels(test_ids)
-    test_ds = DynamicResampledNLST(X_test, y_test, augment=False)
+    # test_ds = DynamicResampledNLST(X_test, y_test, augment=False)
+    test_ds = DynamicResampledDLCS()
     test_dl = test_ds.get_loader(batch_size=1)
     # test_ds_tomo = DynamicTomographyDataset(test_ids, transform=model.get_transform())
     # test_dl_tomo = test_ds_tomo.get_loader(batch_size=1)
@@ -129,9 +134,10 @@ if __name__ == "__main__":
                             use_wandb=False # we're not actually training here
                           )
     
-    # metrics = trainer.validation(test_dl)
-    # logger.info(f"Validation metrics: {metrics}")
-    # exit()
+    metrics = trainer.validation(test_dl)
+    logger.info(f"Validation metrics: {metrics}")
+    exit()
+    
     visualizer = Visualizer()    
 
 
@@ -147,10 +153,11 @@ if __name__ == "__main__":
     logger.info(f"Target layers: {target_layers}")
     # apply the explainer to the test samples
     # explainers = [CAMExplainer(model=model, target_layer=target_layer, cam_class=EigenCAM) for target_layer in target_layers]
-    explainer = CAMExplainer(model=model, target_layer=target_layers, cam_class=ScoreCAM, reshape_transform=None)
+    explainer = CAMExplainer(model=model, target_layer=target_layers, cam_class=EigenCAM, reshape_transform=None)
     # explainer = CAMExplainer(model=model, target_layer=target_layers, cam_class=AblationCAM, reshape_transform=fasterrcnn_reshape_transform)
 
-    iou_thresholds = np.arange(0.0, 1.0, 0.1)
+    # iou_thresholds = np.arange(0.0, 1.0, 0.1)
+    iou_thresholds = [.5]
 
     for iou_num, iou_threshold in enumerate(iou_thresholds):
         id = -1
@@ -189,20 +196,32 @@ if __name__ == "__main__":
             true_boxes = target[0]['boxes'] # ground truth boxes
             image_numpy = image.detach().squeeze(0).cpu().numpy()
             image_numpy = image_numpy.transpose(1,2,0) # convert to numpy and convert from (C, H, W) to (H, W, C)
-            try:
-                bboxes = pred_boxes.cpu().numpy()
-                mask = box_to_mask(image_numpy.shape[:2], bboxes)
-                grayscale_cam = explainer.explain(image=image, labels=[1] * len(bboxes), bboxes=bboxes, iou_threshold=iou_threshold)
+            if False:
+                try:
+                    bboxes = pred_boxes.cpu().numpy()
+                    mask = box_to_mask(image_numpy.shape[:2], bboxes)
+                    grayscale_cam = explainer.explain(image=image, labels=[1] * len(bboxes), bboxes=bboxes, scores=scores, iou_threshold=iou_threshold)
 
-                pg_score, top_activations, pg_cam = adaptive_segmenter_score(grayscale_cam[0], true_boxes.cpu().numpy())
-                logger.info(f"Pointing game score: {pg_score}")
-                pg_scores.append(pg_score)
-            except Exception as e:
-                logger.error(f"Failed to generate CAM for sample {id}: {str(e)}")
-                continue
+                    pg_score, top_activations, pg_cam = adaptive_segmenter_score(grayscale_cam[0], true_boxes.cpu().numpy())
+                    logger.info(f"Pointing game score: {pg_score}")
+                    pg_scores.append(pg_score)
+                except Exception as e:
+                    logger.error(f"Failed to generate CAM for sample {id}: {str(e)}")
+                    continue
+                
+                visualization = explainer.visualize(image=image_numpy, cam=grayscale_cam[0] ** 2)
+                point_vis = explainer.visualize(image=image_numpy, cam=pg_cam)
             
-            # visualization = explainer.visualize(image=image_numpy, cam=grayscale_cam[0] ** 2)
-            # point_vis = explainer.visualize(image=image_numpy, cam=pg_cam)
+            
+            visualizer.display_bboxes(
+                input=image_numpy,
+                pred_boxes=pred_boxes,
+                true_boxes=true_boxes,
+                scores=scores,
+                filename=f"sample_{id}.png",
+                cmap='gray'
+            )
+            
             
             # visualizer.display_bboxes(
             #     input=visualization,
@@ -220,9 +239,9 @@ if __name__ == "__main__":
             #     scores=np.array([]),
             #     filename=f"sample_{id}_pointgame.png",
             # )
-            pbar.set_postfix({"Avg Segmenter Score": np.array(pg_scores).mean()})
+            # pbar.set_postfix({"Avg Segmenter Score": np.array(pg_scores).mean()})
         
         # save pg_scores as numpy
         pg_scores = np.array(pg_scores)
-        np.save(f"pg_scores_scorecam_n_{iou_num}.npy", pg_scores)
+        np.save(f"eigencam_adaptive_segmenter.npy", pg_scores)
         logger.info(f"Average Segmenter Score: {pg_scores / float(len(test_dl))}")
