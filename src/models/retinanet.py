@@ -39,7 +39,7 @@ class RetinaNetResnet50(nn.Module):
         )
 
         # Replace anchor generator for small scales
-        anchor_sizes = ((8,), (16,), (32,), (64,), (128,), (256,))
+        anchor_sizes = ((8,), (16,), (32,), (64,), (128,))
         aspect_ratios = ((1.0,),) * len(anchor_sizes)
         self.model.anchor_generator = AnchorGenerator(
             sizes=anchor_sizes,
