@@ -4,16 +4,85 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 from data.nodule_classification_dataset import DLCSNoduleClassificationDataset
-from models.nodule_classifiers import NoduleClassifier, NoduleClassifierMobileNet, NoduleClassifierEfficientNetv2S
+from models.nodule_classifiers import Resnet18, MobileNet, EfficientNetv2s
 from config.config_2d import get_config
 from tqdm import tqdm
 import wandb
+from torch.optim import Optimizer
+from torch.amp import GradScaler, autocast
+from torch.utils.data import DataLoader
+from torch.nn import Module
 
+config = get_config()
+DEVICE = torch.device(config.device if torch.cuda.is_available() else "cpu")
+
+def train_epoch(model:Module, optimizer:Optimizer, dl: DataLoader, criterion, scaler:GradScaler):
+    global DEVICE, config
+    
+    model.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    pbar = tqdm(dl, desc="Training Progress", unit="batch")
+    
+    for images, labels in pbar:
+        images, labels = images.to(DEVICE), labels.to(DEVICE)
+        optimizer.zero_grad()
+        
+        with autocast("cuda"):    
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        
+        running_loss += loss.item() * images.size(0)
+        _, predicted = torch.max(outputs, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+        
+        pbar.set_postfix({"loss": loss.item()})
+        
+        if config.use_wandb:
+            wandb.log({"train_loss": loss.item()})
+    
+    epoch_loss = running_loss / len(dl)
+    epoch_acc = correct / total
+    
+    return epoch_loss, epoch_acc
+
+def validation_epoch(model, dl, criterion):
+    global config, DEVICE
+    model.eval()
+    
+    val_loss = 0.0
+    val_correct = 0
+    val_total = 0
+    with torch.no_grad():
+        for images, labels in tqdm(dl, desc="Validating"):
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
+            
+            with autocast("cuda"):
+                outputs = model(images)
+                loss = criterion(outputs, labels)
+            
+            val_loss += loss.item() * images.size(0)
+            _, predicted = torch.max(outputs, 1)
+            val_total += labels.size(0)
+            val_correct += (predicted == labels).sum().item()
+            
+    val_loss /= len(dl)
+    val_acc = val_correct / val_total
+    
+    if config.use_wandb:
+        wandb.log({"val_loss": val_loss, "val_accuracy": val_acc})
+    
+    return val_loss, val_acc
+        
 def main():
-    config = get_config()
+    global config, DEVICE
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
-    device = torch.device(config.device if torch.cuda.is_available() else "cpu")
     
     # Load annotations
     annotations_df = pd.read_csv(config.annotation_path)
@@ -45,72 +114,37 @@ def main():
 
     # model = NoduleClassifier(num_classes=2)
     # model = NoduleClassifierMobileNet(num_classes=2)
-    model = NoduleClassifierEfficientNetv2S(num_classes=2)
-    model.to(device)
+    model = EfficientNetv2s(num_classes=2)
+    model.to(DEVICE)
     
-    wandb.init(project="nodule-classification", config=config, name=f"{model.__class__.__name__}_run")
-    wandb.watch(model, log="all", log_freq=300)
+    if config.use_wandb:
+        wandb.init(project="nodule-classification",
+                   config=config,
+                   name=f"{model.__class__.__name__} weight decay",
+                   note="No augmentation")
+        wandb.watch(model, log="all", log_freq=300)
+
     
-    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, weight_decay=0.003)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs, eta_min=0.00001)
     criterion = torch.nn.CrossEntropyLoss()
     logger.info(f"Model initialized: {model.__class__.__name__} with {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters")
-    
-    pbar = tqdm(train_loader, desc="Training Progress", unit="batch")
+    scaler = GradScaler(enabled=config.amp)
     
     # Training loop
     for epoch in range(config.epochs):
-        model.train()
-        running_loss = 0.0
-        correct = 0
-        total = 0
-        
-        for images, labels in pbar:
-            images, labels = images.to(device), labels.to(device)
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            
-            running_loss += loss.item() * images.size(0)
-            _, predicted = torch.max(outputs, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-            
-            pbar.set_postfix({"loss": loss.item()})
-        
-        epoch_loss = running_loss / len(train_loader.dataset)
-        epoch_acc = correct / total
-        logger.info(f"Epoch [{epoch+1}/{config.epochs}], Loss: {epoch_loss:.4f}, Accuracy: {epoch_acc:.4f}")
-        
+        epoch_loss, epoch_acc = train_epoch(model, optimizer, train_loader, criterion, scaler)
+        val_loss, val_acc = validation_epoch(model, val_loader, criterion)        
         scheduler.step()
-        
-        # Validation loop
-        model.eval()
-        val_loss = 0.0
-        val_correct = 0
-        val_total = 0
-        with torch.no_grad():
-            for images, labels in tqdm(val_loader, desc="Validating"):
-                images, labels = images.to(device), labels.to(device)
-                outputs = model(images)
-                loss = criterion(outputs, labels)
-                
-                val_loss += loss.item() * images.size(0)
-                _, predicted = torch.max(outputs, 1)
-                val_total += labels.size(0)
-                val_correct += (predicted == labels).sum().item()
-        val_loss /= len(val_loader.dataset)
-        val_acc = val_correct / val_total
-        logger.info(f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.4f}")
-        wandb.log({
-            "epoch": epoch + 1,
-            "train_loss": epoch_loss,
-            "train_accuracy": epoch_acc,
-            "val_loss": val_loss,
-            "val_accuracy": val_acc
-        })
+
+        if config.use_wandb:
+            wandb.log({
+                "epoch": epoch + 1,
+                "train_loss": epoch_loss,
+                "train_accuracy": epoch_acc,
+                "val_loss": val_loss,
+                "val_accuracy": val_acc
+            })
         
     
     
