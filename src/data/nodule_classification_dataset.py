@@ -6,15 +6,17 @@ from torch.utils.data import DataLoader
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import scipy.ndimage as ndimage
+import random 
 
 
 class DLCSNoduleClassificationDataset(Dataset):
-    def __init__(self, annotations_df, zoom_factor=0.8, min_size=64, augment:bool=False):
+    def __init__(self, annotations_df, zoom_factor=0.8, min_size=64, augment:bool=False, shift_limits:tuple=(-5, 5)):
         """
         Args:
             annotations_df (pd.DataFrame): DataFrame containing nodule annotations.
             transform (callable, optional): Optional transform to be applied on a sample.
         """
+        self.shift_limits = shift_limits
         self.augment = augment
         self.zoom_factor = zoom_factor
         self.min_size = min_size
@@ -25,23 +27,25 @@ class DLCSNoduleClassificationDataset(Dataset):
             # A.Resize(224, 224),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
-            A.GaussianBlur(p=0.1),
-            A.RandomBrightnessContrast(p=0.1),
+            A.GaussianBlur(p=0.2),
+            A.RandomBrightnessContrast(p=0.2),
+            A.CLAHE(p=1.0),
             # A.Normalize(mean=(0.5,), std=(0.5,)),
             ToTensorV2()
         ])
     
     
-    def extract_nodule(self, img, box, perc=None):
+    def extract_nodule(self, img, box, perc=None, rand_shift:bool=False, shift_limits:tuple=(-5, 5)):
         """ Extract a nodule from an image given a bounding box, resizing it by a percentage if provided. """
         if perc is not None:
-            box = self.resize_box(img, box, perc)
+            shift = (random.randint(*shift_limits), random.randint(*shift_limits)) if rand_shift else (0, 0)
+            box = self.resize_box(img, box, perc, shift_center=shift)
         nodule = img[box[1]:box[3], box[0]:box[2]]
         return nodule, box
     
     
-    def resize_box(self, img, box, percentage):
-        """ Resize the bounding box (xyxy format) by a given percentage either by shrinking or enlarging it, taking care of the image bounds. """
+    def resize_box(self, img, box, percentage, shift_center:tuple=(0,0)):
+        """ Resize the bounding box (xyxy format) by a given percentage either by shrinking or enlarging it and by shifting its center , taking care of the image bounds. """
         if not isinstance(box, np.ndarray):
             box = np.array(box)
         box = box.astype(float)
@@ -49,11 +53,12 @@ class DLCSNoduleClassificationDataset(Dataset):
         height = box[3] - box[1]
         
         box_resized = box.copy()
-        box_resized[0] = max(0, box[0] - width * percentage)
-        box_resized[1] = max(0, box[1] - height * percentage)
-        box_resized[2] = min(img.shape[1], box[2] + width * percentage)
-        box_resized[3] = min(img.shape[0], box[3] + height * percentage)
-    
+        box_resized[0] = max(0, box[0] - width * percentage + shift_center[0])
+        box_resized[1] = max(0, box[1] - height * percentage + shift_center[1])
+        box_resized[2] = min(img.shape[1], box[2] + width * percentage + shift_center[0])
+        box_resized[3] = min(img.shape[0], box[3] + height * percentage + shift_center[1])
+        
+        
         return box_resized.astype(int)
 
 
@@ -107,7 +112,7 @@ class DLCSNoduleClassificationDataset(Dataset):
         img = np.load(img_path)
         bbox = row[['bbox_x1', 'bbox_y1', 'bbox_x2', 'bbox_y2']].values
         
-        nodule, _ = self.extract_nodule(img, bbox, perc=self.zoom_factor)
+        nodule, _ = self.extract_nodule(img, bbox, perc=self.zoom_factor, rand_shift=self.augment, shift_limits=self.shift_limits)
         nodule = np.clip(nodule, self.hu_min, self.hu_max)
         nodule = (nodule - self.hu_min) / (self.hu_max - self.hu_min)
         nodule, _ = self.min_upsample(nodule, min_short_side=self.min_size)
