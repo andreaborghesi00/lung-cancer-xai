@@ -10,12 +10,13 @@ import random
 
 
 class DLCSNoduleClassificationDataset(Dataset):
-    def __init__(self, annotations_df, zoom_factor=0.8, min_size=64, augment:bool=False, shift_limits:tuple=(-5, 5)):
+    def __init__(self, annotations_df, zoom_factor=0.8, min_size=64, augment:bool=False, shift_limits:tuple=(-5, 5), do_pad:bool=False):
         """
         Args:
             annotations_df (pd.DataFrame): DataFrame containing nodule annotations.
             transform (callable, optional): Optional transform to be applied on a sample.
         """
+        self.do_pad = do_pad
         self.shift_limits = shift_limits
         self.augment = augment
         self.zoom_factor = zoom_factor
@@ -24,13 +25,17 @@ class DLCSNoduleClassificationDataset(Dataset):
         self.hu_max = 500
         self.annotations_df = annotations_df
         self.albumentations_transform = A.Compose([
-            # A.Resize(224, 224),
+            A.Resize(512, 512),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
-            A.GaussianBlur(p=0.2),
             A.RandomBrightnessContrast(p=0.2),
-            A.CLAHE(p=1.0),
+            A.CLAHE(p=0.3),
             # A.Normalize(mean=(0.5,), std=(0.5,)),
+            ToTensorV2()
+        ])
+        
+        self.val_transform = A.Compose([
+            A.Resize(512, 512),
             ToTensorV2()
         ])
     
@@ -68,7 +73,7 @@ class DLCSNoduleClassificationDataset(Dataset):
             raise ValueError("Nodule image is empty, cannot upsample.")
         
         # Calculate the zoom factors
-        zoom_factors = (target_size[0] / nodule.shape[0], target_size[1] / nodule.shape[1])
+        zoom_factors = (target_size[0] / nodule.shape[0], target_size[1] / nodule.shape[1], 1)
         
         # Upsample the nodule using zoom
         nodule_upsampled = ndimage.zoom(nodule, zoom_factors, order=order, mode=mode)
@@ -91,7 +96,7 @@ class DLCSNoduleClassificationDataset(Dataset):
 
     def min_upsample(self, nodule, min_short_side=64, order=2, mode='constant'):
         """ Upsample the nodule to ensure its shortest side is at least min_short_side, keeping the aspect ratio. """
-        size = nodule.shape
+        size = nodule.shape[:2] # ignore the channel dimension
         short_side = min(size)
         if short_side >= min_short_side:
             return nodule, (1.0, 1.0)
@@ -101,6 +106,16 @@ class DLCSNoduleClassificationDataset(Dataset):
 
         return nodule_upsampled, (zoom_factor, zoom_factor)
 
+    def build_3ch_input(self, prev, curr, succ):
+        # Stack slices in numpy instead of torch
+        if prev is None and succ is None:
+            return np.stack([curr, curr, curr], axis=-1)  # to format (H, W, 3)
+        elif prev is None:
+            return np.stack([curr, curr, succ], axis=-1)
+        elif succ is None:
+            return np.stack([prev, curr, curr], axis=-1)
+        else:
+            return np.stack([prev, curr, succ], axis=-1)
 
     def __len__(self):
         return len(self.annotations_df)
@@ -109,31 +124,47 @@ class DLCSNoduleClassificationDataset(Dataset):
     def __getitem__(self, idx):
         row = self.annotations_df.iloc[idx]
         img_path = row['path']
-        img = np.load(img_path)
+        curr_slice = np.load(img_path)
         bbox = row[['bbox_x1', 'bbox_y1', 'bbox_x2', 'bbox_y2']].values
         
-        nodule, _ = self.extract_nodule(img, bbox, perc=self.zoom_factor, rand_shift=self.augment, shift_limits=self.shift_limits)
+        curr_slice_id = row['slice_id']
+        curr_nid = row['nodule_id']
+        
+        nid_slices = self.annotations_df[self.annotations_df['nodule_id'] == curr_nid]
+        
+        # get the previous and next slices for 3-channel input
+        prev_slice = np.load(nid_slices[nid_slices['slice_id'] == curr_slice_id - 1]['path'].values[0]) if not nid_slices[nid_slices['slice_id'] == curr_slice_id - 1].empty else None
+        succ_slice = np.load(nid_slices[nid_slices['slice_id'] == curr_slice_id + 1]['path'].values[0]) if not nid_slices[nid_slices['slice_id'] == curr_slice_id + 1].empty else None
+        
+        img_3ch = self.build_3ch_input(prev_slice, curr_slice, succ_slice)    
+                    
+        nodule, _ = self.extract_nodule(img_3ch, bbox, perc=self.zoom_factor, rand_shift=self.augment, shift_limits=self.shift_limits)
         nodule = np.clip(nodule, self.hu_min, self.hu_max)
         nodule = (nodule - self.hu_min) / (self.hu_max - self.hu_min)
         nodule, _ = self.min_upsample(nodule, min_short_side=self.min_size)
-        nodule = self.pad_nodule(nodule, target_size=(512, 512))
-        nodule = nodule[..., np.newaxis]  # Add channel dimension so that we have the format (H, W, C)
-        nodule = np.repeat(nodule, 3, axis=-1)  # Repeat the channel to make it (H, W, 3)
+        
+        if self.do_pad: nodule = self.pad_nodule(nodule, target_size=(512, 512))
+        
+        # nodule = nodule[..., np.newaxis]  # Add channel dimension so that we have the format (H, W, C)
+        # nodule = np.repeat(nodule, 3, axis=-1)  # Repeat the channel to make it (H, W, 3)
+        
         if self.augment and self.albumentations_transform:
             augmented = self.albumentations_transform(image=nodule)
             nodule = augmented['image']
         else:
-            nodule = torch.tensor(nodule, dtype=torch.float32).permute(2, 0, 1)
+            augmented = self.val_transform(image=nodule)
+            nodule = augmented['image']
         
         label = torch.tensor(row['is_benign'], dtype=torch.long)
         
         return nodule, label
     
-    def get_loader(self, batch_size=32, shuffle=True, num_workers=4):
+    def get_loader(self, batch_size=32, shuffle=True, num_workers=4, **kwargs):
         return DataLoader(self,
                           batch_size=batch_size,
                           shuffle=shuffle,
                           num_workers=num_workers,
                           pin_memory=True,
                           persistent_workers=True,
+                          **kwargs
                           )
