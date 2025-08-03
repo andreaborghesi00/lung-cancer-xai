@@ -18,6 +18,7 @@ from torch.optim.lr_scheduler import LRScheduler
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
 from utils.focal_loss import FocalLoss
+from data.samplers import CurriculumBalancedSampler
 
 config = get_config()
 DEVICE = torch.device(config.device if torch.cuda.is_available() else "cpu")
@@ -175,19 +176,42 @@ def main():
     train_annotations_oversampled = pd.concat([majority_df, minority_oversampled], ignore_index=True) 
     logger.info(f"Train annotations NOT oversampled: {len(train_annotations)} samples, {len(train_annotations[train_annotations['is_benign'] == 1])} benign and {len(train_annotations[train_annotations['is_benign'] == 0])} malignant")
     logger.info(f"Train annotations oversampled: {len(train_annotations_oversampled)} samples, {len(train_annotations_oversampled[train_annotations_oversampled['is_benign'] == 1])} benign and {len(train_annotations_oversampled[train_annotations_oversampled['is_benign'] == 0])} malignant")
+    
+    # compute difficulty
+    # Columns: x1, y1, x2, y2, hu_mean
+    def compute_difficulty(df):
+        df["area"] = (df["bbox_x2"] - df["bbox_x1"]) * (df["bbox_y2"] - df["bbox_y1"])
+        hu_min  = -1000
+        hu_max = 500
+
+        # Normalize HU and area between 0 and 1
+        df["hu_norm"] = (df['nodule_mean_intensity'] - hu_min) / (hu_max - hu_min)
+        df["area_norm"] = (df["area"] - df["area"].min()) / (df["area"].max() - df["area"].min())
+
+        # Define difficulty as inverse of ease (higher is harder)
+        df["difficulty"] = 1 - 0.5 * (df["hu_norm"] + df["area_norm"])
+        # normalize difficulty to [0, 1]
+        df["difficulty"] = (df["difficulty"] - df["difficulty"].min()) / (df["difficulty"].max() - df["difficulty"].min())
+        return df
+    
+    train_annotations_oversampled = compute_difficulty(train_annotations_oversampled)    
+    
+    # Sampler to handle class imbalance AND curriculum learning, what a move boi
+    sampler = CurriculumBalancedSampler(
+        labels=train_annotations_oversampled['is_benign'].tolist(),
+        difficulties=train_annotations_oversampled['difficulty'].tolist(),
+        total_epochs=config.epochs,
+        samples_per_epoch=config.batch_size * 600
+    )
+    
     # Create datasets
     # train_dataset = DLCSNoduleClassificationDataset(train_annotations, min_size=64, augment=config.augment, zoom_factor=0.8)
     train_dataset = DLCSNoduleClassificationDataset(train_annotations_oversampled, min_size=64, augment=config.augment, zoom_factor=0.8)
-    
     val_dataset = DLCSNoduleClassificationDataset(val_annotations, min_size=64, augment=False, zoom_factor=0.8)
     
-    # Sampler to handle class imbalance
-    sampler = WeightedRandomSampler(weights=weights,
-                                 num_samples=700,  # can be more or fewer
-                                 replacement=True)
     
     # Create data loaders
-    train_loader = train_dataset.get_loader(batch_size=config.batch_size, shuffle=True, num_workers=config.dl_workers)
+    train_loader = train_dataset.get_loader(batch_size=config.batch_size, shuffle=False, num_workers=config.dl_workers, sampler=sampler)
     val_loader = val_dataset.get_loader(batch_size=config.batch_size, shuffle=False, num_workers=config.dl_workers)
 
     # model = Resnet18(num_classes=1)
