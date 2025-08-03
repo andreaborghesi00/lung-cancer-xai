@@ -93,7 +93,9 @@ class DynamicRCNNDataset(Dataset):
         )
         
 class DynamicResampledNLST(Dataset):
-    def __init__(self, image_paths: List[str], boxes: torch.Tensor, augment: bool = True):
+    def __init__(self, image_paths: List[str], boxes: torch.Tensor, augment: bool = True, min_hu: int = -1000, max_hu: int = 500):
+        self.hu_min = min_hu
+        self.hu_max = max_hu
         self.config = get_config()
         self.image_paths = image_paths
         self.boxes = boxes
@@ -169,22 +171,19 @@ class DynamicResampledNLST(Dataset):
         )
         
 class DynamicResampledDLCS(Dataset):
-    def __init__(self, image_paths: np.ndarray, boxes: torch.Tensor, labels:torch.Tensor, augment: bool = True, transform = None):
+    def __init__(self, image_paths: np.ndarray, boxes: torch.Tensor, labels:torch.Tensor, augment: bool = True, transform = None,  min_hu: int = -1000, max_hu: int = 500):
+        self.hu_min = min_hu
+        self.hu_max = max_hu
         self.config = get_config()
-        # self.annotations = pd.read_csv(self.config.annotation_file)
+        self.annotations = pd.read_csv(self.config.annotation_path)
         self.data_dir = self.config.data_path
         self.augment = augment
         self.transform = transform
-        # self.image_paths = self.annotations["path"].tolist()
         self.image_paths = image_paths
-        # self.boxes = self.annotations[["bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2"]].values
-        # self.boxes = torch.tensor(self.boxes, dtype=torch.float32)
+        self.annotations = self.annotations[self.annotations['path'].isin(self.image_paths)]
         self.boxes = boxes
         self.boxes = self.boxes.view(-1, 4) # ensures shape (N, 4)
         
-        # self.labels = self.annotations["benign"].values
-        # self.labels = self.labels + 1 # shift from 0/1 to 1/2
-        # self.labels = torch.tensor(self.labels, dtype=torch.int32)
         self.labels = labels
         self.uniclass_labels = torch.ones(len(self.labels), dtype=torch.int64) # just "nodule"
         
@@ -212,18 +211,39 @@ class DynamicResampledDLCS(Dataset):
         image = np.load(image_path)     
         return image
     
+    def build_3ch_input(self, prev, curr, succ):
+        # Stack slices in numpy instead of torch
+        if prev is None and succ is None:
+            return np.stack([curr, curr, curr], axis=-1)  # to format (H, W, 3)
+        elif prev is None:
+            return np.stack([curr, curr, succ], axis=-1)
+        elif succ is None:
+            return np.stack([prev, curr, curr], axis=-1)
+        else:
+            return np.stack([prev, curr, succ], axis=-1)
+    
     def __getitem__(self, idx):
         target = {
             "boxes": self.boxes[idx].view(-1, 4), # ensures shape (N, 4)
         }
         target["labels"] = torch.ones(len(target["boxes"]), dtype=torch.int64)
-        image = self._load_image(self.image_paths[idx])
+        curr_image_path = self.image_paths[idx]
+        row = self.annotations[self.annotations['path'] == curr_image_path].iloc[0]
+        curr_nid = row['nodule_id']
+        curr_slice_id = row['slice_id']
+        
+        nid_slices = self.annotations[self.annotations['nodule_id'] == curr_nid]
+        
+        prev_slice = self._load_image(nid_slices[nid_slices['slice_id'] == curr_slice_id - 1]['path'].values[0]) if not nid_slices[nid_slices['slice_id'] == curr_slice_id - 1].empty else None
+        succ_slice = self._load_image(nid_slices[nid_slices['slice_id'] == curr_slice_id + 1]['path'].values[0]) if not nid_slices[nid_slices['slice_id'] == curr_slice_id + 1].empty else None
+        curr_slice = self._load_image(curr_image_path)
+        
+        image = self.build_3ch_input(prev_slice, curr_slice, succ_slice)
         
         # normalize image with bounds between -1000 and 500
-        image = np.clip(image, -1000, 500)
-        image = (image + 1000) / 1500 # scale to [0, 1]
+        image = np.clip(image, self.hu_min, self.hu_max)
+        image = (image - self.hu_min) / (self.hu_max - self.hu_min) # scale to [0, 1]
         
-                
         if self.augment:
             boxes_np = target["boxes"].numpy()
             labels_np = target["labels"].numpy()
@@ -235,14 +255,16 @@ class DynamicResampledDLCS(Dataset):
             )
             
             image = torch.tensor(transformed["image"], dtype=torch.float32)
+            image = image.permute(2, 0, 1)
             # if self.transform:
             #     image = self.transform(image)
-            image = image.unsqueeze(0) # add channel dimension
+            # image = image.unsqueeze(0) # add channel dimension
             target["boxes"] = torch.tensor(transformed["bboxes"], dtype=torch.float32)
             target["labels"] = torch.tensor(transformed["labels"], dtype=torch.int64)
             
         else:
-            image = torch.tensor(image, dtype=torch.float32).unsqueeze(0)
+            image = torch.tensor(image, dtype=torch.float32)
+            image = image.permute(2, 0, 1)
         return image, target
     
     def get_loader(self, shuffle: bool = False, num_workers: int = None, batch_size: int = None):
