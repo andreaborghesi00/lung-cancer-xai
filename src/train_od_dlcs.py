@@ -15,13 +15,21 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import pandas as pd
 import torch
 import numpy as np
-
+from data.samplers import CurriculumSampler
+from pathlib import Path
 if __name__ == "__main__":
     config = get_config()
     config.validate()
     logger = logging.getLogger(__name__)
     utils.setup_logging(level=logging.INFO)
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")    
+    
+    model_path = Path(config.checkpoint_dir) / config.model_checkpoint
+    logger.info(f"Loading model from checkpoint from {model_path}")
+
+    # model = utils.load_model(model_path, FasterRCNNResnet50, device=device)
+    # model = utils.load_model(model_path, FasterRCNNMobileNet, device=device)
+    model = utils.load_model(model_path, frcnn.FasterRCNNEfficientNetv2s, device=device)
     
     # model 
     logger.info("Initializing model")
@@ -30,15 +38,13 @@ if __name__ == "__main__":
     # model = frcnn.FasterRCNNEfficientNetB2()
     # model = frcnn.FasterRCNNResnet50()
     # model = rn.RetinaNetResnet50(num_classes=2)
-    model = rn.RetinaNetEfficientNetv2s(num_classes=2)
-    logger.info(f"Model initialized {model.__class__.__name__} with {utils.count_parameters(model)} trainable parameters")
+    # model = rn.RetinaNetEfficientNetv2s(num_classes=2)
+    # logger.info(f"Model initialized {model.__class__.__name__} with {utils.count_parameters(model)} trainable parameters")
 
     model = model.to(device)
     
     # prepare data
     
-
-    ## DLCS
     annotations = pd.read_csv(config.annotation_path)
     unique_tomographies = annotations['pid'].unique()
     
@@ -48,6 +54,33 @@ if __name__ == "__main__":
     logger.info("Splitting data into train, validation and test sets")
     train_ids, valtest_ids = train_test_split(unique_tomographies, test_size=(1-config.train_split_ratio), random_state=config.random_state)
     val_ids, test_ids = train_test_split(valtest_ids, test_size=(1-config.val_test_split_ratio), random_state=config.random_state)
+
+    def compute_difficulty(df):
+        df["area"] = (df["bbox_x2"] - df["bbox_x1"]) * (df["bbox_y2"] - df["bbox_y1"])
+        hu_min  = -1000
+        hu_max = 500
+
+        # Normalize HU and area between 0 and 1
+        df["hu_norm"] = (df['nodule_mean_intensity'] - hu_min) / (hu_max - hu_min)
+        df["area_norm"] = (df["area"] - df["area"].min()) / (df["area"].max() - df["area"].min())
+
+        # Define difficulty as inverse of ease (higher is harder)
+        df["difficulty"] = 1 - 0.5 * (df["hu_norm"] + df["area_norm"])
+        
+        # normalize difficulty to [0, 1]
+        df["difficulty"] = (df["difficulty"] - df["difficulty"].min()) / (df["difficulty"].max() - df["difficulty"].min())
+        return df
+    
+    train_annotations = annotations[annotations['pid'].isin(train_ids)]
+    train_annotations = compute_difficulty(train_annotations)    
+    
+    # Sampler to handle class imbalance AND curriculum learning, what a move boi
+    sampler = CurriculumSampler(
+        labels=[0 for _ in range(len(train_annotations))], # dummy labels, we don't need them here
+        difficulties=train_annotations['difficulty'].tolist(),
+        total_epochs=6, # reaching full throttle for difficulty at epoch 10
+        samples_per_epoch=config.batch_size * 600
+    )
 
     # load paths and labels
     logger.info("Loading paths and labels")
@@ -80,11 +113,12 @@ if __name__ == "__main__":
     # train_ds = DynamicResampledDLCS(X_train, boxes_train, class_train, augment=config.augment, transform=model.get_transform())
     # val_ds = DynamicResampledDLCS(X_val, boxes_val, class_val, augment=False, transform=model.get_transform())
     
-    train_ds = DynamicResampledDLCS(X_train, boxes_train, class_train, augment=config.augment)
+    train_ds = DynamicResampledDLCS(X_train, boxes_train, class_train, augment=config.augment, annotations=train_annotations)
     val_ds = DynamicResampledDLCS(X_val, boxes_val, class_val, augment=False)
     
+    # train_dl = train_ds.get_loader(shuffle=False, batch_size=config.batch_size, sampler=sampler)
     train_dl = train_ds.get_loader(shuffle=True, batch_size=config.batch_size)
-    val_dl = val_ds.get_loader(batch_size = config.batch_size) # this loader gets whole tomographies, hence the smaller batch size
+    val_dl = val_ds.get_loader(batch_size = config.batch_size) 
     
     # free memory
     del X_train, X_val, train_ds, val_ds, unique_tomographies, train_ids, val_ids
@@ -94,8 +128,9 @@ if __name__ == "__main__":
     logger.info("Initializing optimizer and scheduler")
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=6, T_mult=2) # max since we are maximizing iou
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs, eta_min=0.0)  # to avoid issues with amp when gradients are large
-
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs, eta_min=0.0)  # to avoid issues with amp when gradients are large
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)  # simple step scheduler
+    
     # training
     logger.info("Initializing trainer")
     trainer = RCNNTrainer(

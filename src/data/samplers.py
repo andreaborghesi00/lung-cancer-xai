@@ -51,10 +51,10 @@ class CurriculumBalancedSampler(Sampler):
 
     def _get_class_sample(self, class_indices, class_diff, n):
         # mask = class_diff <= self.progress # allow only samples with difficulty <= progress (we can do this as we assume to be both between 0 and 1).
-        mask = class_diff <= 0.5 + self.progress
+        mask = class_diff <= 0.35 + self.progress
         # mask = class_diff <= 9999
         if mask.sum() == 0:
-            mask = class_diff <= self.progress + 0.1  # avoid empty
+            mask = class_diff <= self.progress  # avoid empty
         eligible = class_indices[mask]
         weights = np.ones(len(eligible))
         return np.random.choice(eligible, size=n, replace=True, p=weights / weights.sum())
@@ -69,4 +69,41 @@ class CurriculumBalancedSampler(Sampler):
 
     def __len__(self):
         return self.samples_per_epoch
+    
+class CurriculumSampler(Sampler):
+    def __init__(self, labels, difficulties, total_epochs, samples_per_epoch):
+        self.difficulties = np.array(difficulties) # we don't really need to sort the df by difficulty, we just need the values, we'll filter them later
+        self.total_epochs = total_epochs
+        self.samples_per_epoch = samples_per_epoch
+
+        self.progress = 0.0
+
+        # Normalize difficulties separately per class
+        self.diff = self._normalize(self.difficulties)
+
+    def _normalize(self, x):
+        return (x - x.min()) / (x.max() - x.min() + 1e-8)
+
+    def set_epoch(self, epoch):
+        self.progress = (epoch) / (self.total_epochs) # we'll use this as a moving threshold for the allowed difficulty range. the +1
+
+    def _get_sample(self, class_diff, n):
+        # mask = class_diff <= self.progress # allow only samples with difficulty <= progress (we can do this as we assume to be both between 0 and 1).
+        mask = class_diff <= 0.4 + self.progress
+        # mask = class_diff <= 9999
+        if mask.sum() == 0:
+            mask = class_diff <= self.progress  # avoid empty
+        # one-class eligibility
+        eligible = np.where(mask)[0]        
+        weights = np.ones(len(eligible))
+        return np.random.choice(eligible, size=n, replace=True, p=weights / weights.sum())
+    
+    def __iter__(self):
+        sample = self._get_sample(self.diff, self.samples_per_epoch)
+        return iter(sample.tolist())
+
+    def __len__(self):
+        return self.samples_per_epoch
+    
+
 
