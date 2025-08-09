@@ -25,6 +25,8 @@ from pytorch_grad_cam.metrics.cam_mult_image import DropInConfidence, IncreaseIn
 import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
+from models.retinanet import RetinaNetResnet50, RetinaNetEfficientNetv2s
+import pandas as pd
 def _get_image_from_tomo(tomo, idx):
     image = tomo[idx].squeeze(0).cpu().numpy().transpose(1, 2, 0)
     return image
@@ -104,20 +106,40 @@ if __name__ == "__main__":
     # model = utils.load_model(model_path, FasterRCNNResnet50, device=device)
     # model = utils.load_model(model_path, FasterRCNNMobileNet, device=device)
     model = utils.load_model(model_path, FasterRCNNEfficientNetv2s, device=device)
+    # model = utils.load_model(model_path, RetinaNetResnet50, device=device)
+    # model = utils.load_model(model_path, RetinaNetEfficientNetv2s, device=device)
     model.eval()
     
     logger.info(model.model.backbone)
 
     # load data
-    preprocessor = ROIPreprocessor()
-    unique_tomographies = preprocessor.load_tomography_ids()
+    # DLCS
+    annotations = pd.read_csv(config.annotation_path)
+    unique_tomographies = annotations['pid'].unique()
+    
+    # NLST
+    # preprocessor = ROIPreprocessor()
+    # unique_tomographies = preprocessor.load_tomography_ids()
+    
+    # SHARED
     _, valtest_ids = train_test_split(unique_tomographies, test_size=(1-config.train_split_ratio), random_state=config.random_state)
     _, test_ids = train_test_split(valtest_ids, test_size=(1-config.val_test_split_ratio), random_state=config.random_state)
     # _, test_ids = train_test_split(valtest_ids, test_size=0.15, random_state=69420)
     
-    X_test, y_test = preprocessor.load_paths_labels(test_ids)
+    # NLST
+    # X_test, y_test = preprocessor.load_paths_labels(test_ids)
     # test_ds = DynamicResampledNLST(X_test, y_test, augment=False)
-    test_ds = DynamicResampledDLCS()
+    
+    # DLCS
+    X_test = annotations[annotations['pid'].isin(test_ids)]['path'].values
+    X_test = np.array(X_test)
+    boxes_test = annotations[annotations['pid'].isin(test_ids)][["bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2"]].values
+    boxes_test = torch.tensor(boxes_test, dtype=torch.float32)
+    class_test = annotations[annotations['pid'].isin(test_ids)]['is_benign'].values    
+    class_test = torch.tensor(class_test, dtype=torch.float32)
+    test_ds = DynamicResampledDLCS(X_test, boxes_test, class_test, augment=False)
+    
+    # SHARED
     test_dl = test_ds.get_loader(batch_size=1)
     # test_ds_tomo = DynamicTomographyDataset(test_ids, transform=model.get_transform())
     # test_dl_tomo = test_ds_tomo.get_loader(batch_size=1)
@@ -134,7 +156,7 @@ if __name__ == "__main__":
                             use_wandb=False # we're not actually training here
                           )
     
-    metrics = trainer.validation(test_dl)
+    metrics, coco_dict = trainer.validation(test_dl)
     logger.info(f"Validation metrics: {metrics}")
     exit()
     
