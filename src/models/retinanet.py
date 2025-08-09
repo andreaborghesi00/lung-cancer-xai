@@ -5,13 +5,17 @@ from torchvision.models.detection import (
     RetinaNet_ResNet50_FPN_V2_Weights
 )
 from torchvision.models.detection.anchor_utils import AnchorGenerator
-from torchvision.models.detection.retinanet import RetinaNetClassificationHead, RetinaNetRegressionHead, RetinaNet, RetinaNetHead
+from torchvision.models.detection.retinanet import RetinaNetClassificationHead, RetinaNetRegressionHead, RetinaNet, RetinaNetHead, RetinaNet
 from torchvision.models import ResNet50_Weights
 from torchvision.models.efficientnet import efficientnet_v2_s, EfficientNet_V2_S_Weights, efficientnet_b2, EfficientNet_B2_Weights, efficientnet_b3, EfficientNet_B3_Weights
 from typing import Optional, Any
 from torchvision.models.detection.backbone_utils import BackboneWithFPN
 from torchvision.ops.feature_pyramid_network import LastLevelMaxPool, LastLevelP6P7
+from torchvision.models.mobilenetv3 import mobilenet_v3_large, MobileNet_V3_Large_Weights
+from torchvision.models.detection.backbone_utils import _mobilenet_extractor
 from functools import partial
+from utils.utils import setup_logging
+from torchvision.ops import misc as misc_nn_ops
 
 class RetinaNetResnet50(nn.Module):
     """
@@ -196,6 +200,81 @@ class RetinaNetEfficientNetv2s(nn.Module):
                     extra_blocks=LastLevelP6P7(in_channels_list[-1], out_channels),
                     # norm_layer=misc_nn_ops.FrozenBatchNorm2d,
                 )
+    def get_transform(self):
+        """Return the preprocessing transforms for the model."""
+        return self.transform
+
+    def forward(self, images, targets=None):
+        """
+        Forward pass.
+        - During training, returns losses dict.
+        - During inference, returns detections.
+        """
+        if self.training:
+            return self.model(images, targets)
+        return self.model(images)
+
+class RetinaNetMobileNet(nn.Module):
+    def __init__(self, num_classes=2):
+        super().__init__()
+        self.weights = MobileNet_V3_Large_Weights.DEFAULT
+        self.transform = self.weights.transforms()
+        self.model = self.retinanet_mobilenet_fpn(
+            weights=self.weights,
+            progress=True,
+            num_classes=num_classes,
+        )
+        
+    def retinanet_mobilenet_fpn(self, weights, trainable_backbone_layers=6, num_classes=2, **kwargs):
+        norm_layer = misc_nn_ops.FrozenBatchNorm2d 
+
+        backbone = mobilenet_v3_large(weights=weights, progress=True, norm_layer=norm_layer)
+        backbone_fpn = _mobilenet_extractor(backbone, True, trainable_backbone_layers)
+        anchor_sizes = (
+            (
+                8,
+                16,
+                32,
+                64,
+                128,
+            ),
+        ) * 3
+        aspect_ratios = ((0.5, 1.0, 2.0),) * len(anchor_sizes)
+        anchor_generator = AnchorGenerator(
+            sizes=anchor_sizes,
+            aspect_ratios=aspect_ratios
+        )
+        
+        head = RetinaNetHead(
+            backbone_fpn.out_channels,
+            anchor_generator.num_anchors_per_location()[0],
+            num_classes if weights is None else len(weights.meta["categories"]),
+            norm_layer=partial(nn.GroupNorm, 32),
+        )
+        head.regression_head._loss_type = "giou"
+        
+        model = RetinaNet(backbone_fpn,
+                          num_classes if weights is None else len(weights.meta["categories"]), 
+                          anchor_generator=anchor_generator, 
+                          head=head, 
+                          **kwargs)
+
+        num_anchors = model.anchor_generator.num_anchors_per_location()[0]
+        in_channels = model.backbone.out_channels
+
+        model.head.classification_head = RetinaNetClassificationHead(
+            in_channels=in_channels,
+            num_anchors=num_anchors,
+            num_classes=num_classes
+        )
+        
+        model.head.regression_head = RetinaNetRegressionHead(
+            in_channels=in_channels,
+            num_anchors=num_anchors,
+        )
+        
+        return model
+    
     def get_transform(self):
         """Return the preprocessing transforms for the model."""
         return self.transform
