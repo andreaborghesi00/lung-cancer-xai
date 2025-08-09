@@ -6,7 +6,7 @@ from pathlib import Path
 import logging
 import random
 
-@dataclass(frozen=True)
+@dataclass(frozen=False)
 class ModelConfig:
     project_name: str
     project_dir: str = field(default=os.path.join(Path(__file__).parent.parent.parent), init=False)
@@ -82,9 +82,9 @@ class ModelConfig:
 # singleton
 _config_instance = None
 
-def get_config(config_path: str = None):
+def get_config(config_path: str = None, force_reload: bool = False) -> ModelConfig:
     global _config_instance
-    if _config_instance is None:
+    if _config_instance is None or force_reload:
         if config_path is None:
             config_path = os.path.join(Path(__file__).parent, "config_2d.yaml") # default config path
         _config_instance = ModelConfig.load_config(config_path)
