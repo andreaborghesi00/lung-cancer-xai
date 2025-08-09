@@ -153,6 +153,8 @@ class DynamicResampledNLST(Dataset):
         )
         
         image = torch.tensor(transformed["image"], dtype=torch.float32).unsqueeze(0) # add channel dimension
+        # duplicate channels to make it 3-channel
+        image = image.repeat(3, 1, 1)  # repeat the single
         target["boxes"] = torch.tensor(transformed["bboxes"], dtype=torch.float32)
         target["labels"] = torch.tensor(transformed["labels"], dtype=torch.int64) 
 
@@ -171,11 +173,20 @@ class DynamicResampledNLST(Dataset):
         )
         
 class DynamicResampledDLCS(Dataset):
-    def __init__(self, image_paths: np.ndarray, boxes: torch.Tensor, labels:torch.Tensor, augment: bool = True, transform = None,  min_hu: int = -1000, max_hu: int = 500):
+    def __init__(self,
+                 image_paths: np.ndarray, 
+                 boxes: torch.Tensor, 
+                 labels:torch.Tensor, 
+                 augment: bool = True, 
+                 transform = None, 
+                  min_hu: int = -1000, 
+                 max_hu: int = 500,
+                 annotations: pd.DataFrame = None):
+        
         self.hu_min = min_hu
         self.hu_max = max_hu
         self.config = get_config()
-        self.annotations = pd.read_csv(self.config.annotation_path)
+        self.annotations = annotations if annotations is not None else pd.read_csv(self.config.annotation_path)
         self.data_dir = self.config.data_path
         self.augment = augment
         self.transform = transform
@@ -201,7 +212,7 @@ class DynamicResampledDLCS(Dataset):
                 # A.MultiplicativeNoise(multiplier=(0.9, 1.1), p=0.3),                
                 
                 # CT-specific augmentations
-                A.CLAHE(clip_limit=2.0, p=1.0),  # Enhances contrast locally,                
+                A.CLAHE(clip_limit=2.0, p=0.4),  # Enhances contrast locally,                
             ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
         
     def __len__(self):
@@ -265,6 +276,96 @@ class DynamicResampledDLCS(Dataset):
         else:
             image = torch.tensor(image, dtype=torch.float32)
             image = image.permute(2, 0, 1)
+        return image, target
+    
+    def get_loader(self, shuffle: bool = False, num_workers: int = None, batch_size: int = None, **kwargs):
+        return DataLoader(
+            self,
+            batch_size=self.config.batch_size if batch_size is None else batch_size,
+            shuffle=shuffle,
+            num_workers=self.config.dl_workers if num_workers is None else num_workers,
+            collate_fn=lambda x: tuple(zip(*x)), # custom collate function to handle the target dictionary,
+            persistent_workers=True,
+            prefetch_factor=2,
+            pin_memory=True,
+            **kwargs
+        )       
+
+
+class DynamicResampledDLCSOld(Dataset):
+    def __init__(self,
+                 image_paths: np.ndarray, 
+                 boxes: torch.Tensor, 
+                 labels:torch.Tensor, 
+                 augment: bool = True, 
+                 transform = None, 
+                  min_hu: int = -1000, 
+                 max_hu: int = 500,
+                 annotations: pd.DataFrame = None):
+        self.hu_min = min_hu
+        self.hu_max = max_hu
+        
+        self.config = get_config()
+        self.data_dir = self.config.data_path
+        self.augment = augment
+        self.transform = transform
+        self.image_paths = image_paths
+        self.boxes = boxes
+        self.boxes = self.boxes.view(-1, 4) # ensures shape (N, 4)
+        
+        self.labels = labels
+        self.uniclass_labels = torch.ones(len(self.labels), dtype=torch.int64) # just "nodule"
+        
+        if self.augment:
+            self.albu_transforms = A.Compose([
+                # Spatial transformations
+                A.HorizontalFlip(p=0.5),
+                A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.5),
+                
+                # Brightness/contrast adjustments (subtle for medical images)
+                A.RandomBrightnessContrast(brightness_limit=0.1, contrast_limit=0.1, p=0.5),
+                
+                A.CLAHE(clip_limit=2.0, p=0.2),  # Enhances contrast locally,                
+            ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['labels']))
+        
+    def __len__(self):
+        return len(self.image_paths)
+    
+    def _load_image(self, image_path: str) -> np.ndarray:
+        image = np.load(image_path)     
+        return image
+    
+    def __getitem__(self, idx):
+        target = {
+            "boxes": self.boxes[idx].view(-1, 4), # ensures shape (N, 4)
+        }
+        target["labels"] = torch.ones(len(target["boxes"]), dtype=torch.int64)
+        image = self._load_image(self.image_paths[idx])
+        
+        # normalize image with bounds between -1000 and 500
+        image = np.clip(image, self.hu_min, self.hu_max)
+        image = (image - self.hu_min) / (self.hu_max - self.hu_min) # scale to [0, 1]
+        
+                
+        if self.augment:
+            boxes_np = target["boxes"].numpy()
+            labels_np = target["labels"].numpy()
+
+            transformed = self.albu_transforms(
+                image=image,
+                bboxes=boxes_np,
+                labels=labels_np
+            )
+            
+            image = torch.tensor(transformed["image"], dtype=torch.float32)
+            # if self.transform:
+            #     image = self.transform(image)
+            image = image.unsqueeze(0) # add channel dimension
+            target["boxes"] = torch.tensor(transformed["bboxes"], dtype=torch.float32)
+            target["labels"] = torch.tensor(transformed["labels"], dtype=torch.int64)
+            
+        else:
+            image = torch.tensor(image, dtype=torch.float32).unsqueeze(0)
         return image, target
     
     def get_loader(self, shuffle: bool = False, num_workers: int = None, batch_size: int = None):
