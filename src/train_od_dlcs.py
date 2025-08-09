@@ -10,29 +10,52 @@ import models.faster_rcnn as frcnn
 import models.retinanet as rn
 from training.rcnn_trainer import RCNNTrainer
 import gc
-import torch.nn.parallel
 from torch.nn.parallel import DistributedDataParallel as DDP
 import pandas as pd
 import torch
 import numpy as np
-from data.samplers import CurriculumSampler
-from pathlib import Path
+import argparse
+
 if __name__ == "__main__":
-    config = get_config()
+    parser = argparse.ArgumentParser(description="Train a model on the DLCS dataset.")
+    parser.add_argument("--config", type=str, default="config/config_2d.yaml", help="Path to the configuration file.")
+    parser.add_argument("--model", type=str, default="FasterRCNNEfficientNetv2s", help="Model to use for training.")
+
+    args = parser.parse_args()
+    
+    config = get_config(args.config, force_reload=True)
     config.validate()
     logger = logging.getLogger(__name__)
     utils.setup_logging(level=logging.INFO)
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")    
     
-    model_path = Path(config.checkpoint_dir) / config.model_checkpoint
-    logger.info(f"Loading model from checkpoint from {model_path}")
-
-    # model = utils.load_model(model_path, FasterRCNNResnet50, device=device)
-    # model = utils.load_model(model_path, FasterRCNNMobileNet, device=device)
-    model = utils.load_model(model_path, frcnn.FasterRCNNEfficientNetv2s, device=device)
+    # model_path = Path(config.checkpoint_dir) / config.model_checkpoint
+    # logger.info(f"Loading model from checkpoint from {model_path}")
+    # model = utils.load_model(model_path, frcnn.FasterRCNNEfficientNetv2s, device=device)
     
     # model 
     logger.info("Initializing model")
+    if str.lower(args.model) == "fasterrcnnefficientnetv2s":
+        config.experiment_name = "FasterRCNN ENv2s " + f" {config.experiment_name}" # append model name to experiment name
+        model = frcnn.FasterRCNNEfficientNetv2s(num_classes=2)
+    elif str.lower(args.model) == "fasterrcnnmobilenet":
+        config.experiment_name = "FasterRCNN MobileNet " + f" {config.experiment_name}"
+        model = frcnn.FasterRCNNMobileNet(num_classes=2)
+    elif str.lower(args.model) == "fasterrcnnresnet50":
+        config.experiment_name = "FasterRCNN ResNet50 " + f" {config.experiment_name}"
+        model = frcnn.FasterRCNNResnet50(num_classes=2)
+    elif str.lower(args.model) == "retinanetresnet50":
+        config.experiment_name = "RetinaNet ResNet50 " + f" {config.experiment_name}"
+        model = rn.RetinaNetResnet50(num_classes=2)
+    elif str.lower(args.model) == "retinanetefficientnetv2s":
+        config.experiment_name = "RetinaNet ENv2s " + f" {config.experiment_name}"
+        model = rn.RetinaNetEfficientNetv2s(num_classes=2)
+    elif str.lower(args.model) == "retinanetmobilenet":
+        config.experiment_name = "RetinaNet MobileNet " + f" {config.experiment_name}"
+        model = rn.RetinaNetMobileNet(num_classes=2)
+    else:
+        raise ValueError(f"Unknown model: {args.model}. Supported models are: FasterRCNN, RetinaNet.")
+
     # model = frcnn.FasterRCNNMobileNet()
     # model = frcnn.FasterRCNNEfficientNetv2s()
     # model = frcnn.FasterRCNNEfficientNetB2()
@@ -55,32 +78,32 @@ if __name__ == "__main__":
     train_ids, valtest_ids = train_test_split(unique_tomographies, test_size=(1-config.train_split_ratio), random_state=config.random_state)
     val_ids, test_ids = train_test_split(valtest_ids, test_size=(1-config.val_test_split_ratio), random_state=config.random_state)
 
-    def compute_difficulty(df):
-        df["area"] = (df["bbox_x2"] - df["bbox_x1"]) * (df["bbox_y2"] - df["bbox_y1"])
-        hu_min  = -1000
-        hu_max = 500
+    # def compute_difficulty(df):
+    #     df["area"] = (df["bbox_x2"] - df["bbox_x1"]) * (df["bbox_y2"] - df["bbox_y1"])
+    #     hu_min  = -1000
+    #     hu_max = 500
 
-        # Normalize HU and area between 0 and 1
-        df["hu_norm"] = (df['nodule_mean_intensity'] - hu_min) / (hu_max - hu_min)
-        df["area_norm"] = (df["area"] - df["area"].min()) / (df["area"].max() - df["area"].min())
+    #     # Normalize HU and area between 0 and 1
+    #     df["hu_norm"] = (df['nodule_mean_intensity'] - hu_min) / (hu_max - hu_min)
+    #     df["area_norm"] = (df["area"] - df["area"].min()) / (df["area"].max() - df["area"].min())
 
-        # Define difficulty as inverse of ease (higher is harder)
-        df["difficulty"] = 1 - 0.5 * (df["hu_norm"] + df["area_norm"])
+    #     # Define difficulty as inverse of ease (higher is harder)
+    #     df["difficulty"] = 1 - 0.5 * (df["hu_norm"] + df["area_norm"])
         
-        # normalize difficulty to [0, 1]
-        df["difficulty"] = (df["difficulty"] - df["difficulty"].min()) / (df["difficulty"].max() - df["difficulty"].min())
-        return df
+    #     # normalize difficulty to [0, 1]
+    #     df["difficulty"] = (df["difficulty"] - df["difficulty"].min()) / (df["difficulty"].max() - df["difficulty"].min())
+    #     return df
     
     train_annotations = annotations[annotations['pid'].isin(train_ids)]
-    train_annotations = compute_difficulty(train_annotations)    
+    # train_annotations = compute_difficulty(train_annotations)    
     
-    # Sampler to handle class imbalance AND curriculum learning, what a move boi
-    sampler = CurriculumSampler(
-        labels=[0 for _ in range(len(train_annotations))], # dummy labels, we don't need them here
-        difficulties=train_annotations['difficulty'].tolist(),
-        total_epochs=6, # reaching full throttle for difficulty at epoch 10
-        samples_per_epoch=config.batch_size * 600
-    )
+    # # Sampler to handle class imbalance AND curriculum learning, what a move boi
+    # sampler = CurriculumSampler(
+    #     labels=[0 for _ in range(len(train_annotations))], # dummy labels, we don't need them here
+    #     difficulties=train_annotations['difficulty'].tolist(),
+    #     total_epochs=6, # reaching full throttle for difficulty at epoch 10
+    #     samples_per_epoch=config.batch_size * 600
+    # )
 
     # load paths and labels
     logger.info("Loading paths and labels")
@@ -128,8 +151,8 @@ if __name__ == "__main__":
     logger.info("Initializing optimizer and scheduler")
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=6, T_mult=2) # max since we are maximizing iou
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs, eta_min=0.0)  # to avoid issues with amp when gradients are large
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)  # simple step scheduler
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs, eta_min=0.0)  # to avoid issues with amp when gradients are large
+    # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)  # simple step scheduler
     
     # training
     logger.info("Initializing trainer")
@@ -156,14 +179,17 @@ if __name__ == "__main__":
     gc.collect() # garbage collection
     
     # testing
-    # logger.info("Testing the model")
-    # X_test, y_test = preprocessor.load_paths_labels(test_ids)
-    # test_ds = DynamicRCNNDataset(X_test, y_test, transform=model.get_transform())
-    # test_dl = test_ds.get_loader()
-    # test_metrics = trainer.validation(test_dl) 
-    # logger.info(f"Test metrics: {test_metrics}")
+    logger.info("Testing the model")
+    X_test = annotations[annotations['pid'].isin(test_ids)]['path'].values
+    X_test = np.array(X_test)
+    boxes_test = annotations[annotations['pid'].isin(test_ids)][["bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2"]].values
+    boxes_test = torch.tensor(boxes_test, dtype=torch.float32)
+    class_test = annotations[annotations['pid'].isin(test_ids)]['is_benign'].values    
+    class_test = torch.tensor(class_test, dtype=torch.float32)
     
-    # test_ds_tomography = DynamicTomographyDataset(test_ids, transform=model.get_transform(), augment=False)
-    # test_dl_tomography = test_ds_tomography.get_loader()
-    # test_metrics_tomography = trainer.validation(test_dl_tomography)
-    # logger.info(f"Test metrics tomography: {test_metrics_tomography}")
+    test_ds = DynamicResampledDLCS(X_test, boxes_test, class_test, augment=False)
+    test_dl = test_ds.get_loader(batch_size=config.batch_size)
+    
+    metrics, coco_results_dict = trainer.validation(test_dl)
+    # upload coco dict to wandb if enabled
+    trainer.save_ap_ar_plot(coco_results_dict)

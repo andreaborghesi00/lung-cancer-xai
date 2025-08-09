@@ -15,22 +15,47 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import pandas as pd
 import torch
 import numpy as np
+import argparse
 
 if __name__ == "__main__":
-    config = get_config()
+    parser = argparse.ArgumentParser(description="Train a model on the DLCS dataset.")
+    parser.add_argument("--config", type=str, default="config/config_2d.yaml", help="Path to the configuration file.")
+    parser.add_argument("--model", type=str, default="FasterRCNNEfficientNetv2s", help="Model to use for training.")
+
+    args = parser.parse_args()
+    
+    config = get_config(args.config, force_reload=True)
     config.validate()
     logger = logging.getLogger(__name__)
     utils.setup_logging(level=logging.INFO)
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")    
     
+    logger.info(f"Configs: {config}")
+    logger.info(f"Config path: {args.config}")
+    
     # model 
     logger.info("Initializing model")
-    # model = frcnn.FasterRCNNMobileNet()
-    # model = frcnn.FasterRCNNEfficientNetv2s()
-    # model = frcnn.FasterRCNNEfficientNetB2()
-    # model = frcnn.FasterRCNNResnet50()
-    model = rn.RetinaNetResnet50(num_classes=2)  # num_classes=2 for benign/malignant classification
-    
+    if str.lower(args.model) == "fasterrcnnefficientnetv2s":
+        config.experiment_name = "FasterRCNN ENv2s " + f" {config.experiment_name}" # append model name to experiment name
+        model = frcnn.FasterRCNNEfficientNetv2s(num_classes=2)
+    elif str.lower(args.model) == "fasterrcnnmobilenet":
+        config.experiment_name = "FasterRCNN MobileNet " + f" {config.experiment_name}"
+        model = frcnn.FasterRCNNMobileNet(num_classes=2)
+    elif str.lower(args.model) == "fasterrcnnresnet50":
+        config.experiment_name = "FasterRCNN ResNet50 " + f" {config.experiment_name}"
+        model = frcnn.FasterRCNNResnet50(num_classes=2)
+    elif str.lower(args.model) == "retinanetresnet50":
+        config.experiment_name = "RetinaNet ResNet50 " + f" {config.experiment_name}"
+        model = rn.RetinaNetResnet50(num_classes=2)
+    elif str.lower(args.model) == "retinanetefficientnetv2s":
+        config.experiment_name = "RetinaNet ENv2s " + f" {config.experiment_name}"
+        model = rn.RetinaNetEfficientNetv2s(num_classes=2)
+    elif str.lower(args.model) == "retinanetmobilenet":
+        config.experiment_name = "RetinaNet MobileNet " + f" {config.experiment_name}"
+        model = rn.RetinaNetMobileNet(num_classes=2)
+    else:
+        raise ValueError(f"Unknown model: {args.model}. Supported models are: FasterRCNN, RetinaNet.")
+
     logger.info(f"Model initialized {model.__class__.__name__} with {utils.count_parameters(model)} trainable parameters")
 
     model = model.to(device)
@@ -40,10 +65,6 @@ if __name__ == "__main__":
     ## NLST
     preprocessor = ROIPreprocessor()
     unique_tomographies = preprocessor.load_tomography_ids()
-    
-    ## DLCS
-    # annotations = pd.read_csv(config.annotation_path)
-    # unique_tomographies = annotations['pid'].unique()
     
     logger.info(f"Unique tomographies: {len(unique_tomographies)}")
     
@@ -108,13 +129,11 @@ if __name__ == "__main__":
     
     # testing
     logger.info("Testing the model")
-    # X_test, y_test = preprocessor.load_paths_labels(test_ids)
-    # test_ds = DynamicRCNNDataset(X_test, y_test, transform=model.get_transform())
-    # test_dl = test_ds.get_loader()
-    # test_metrics = trainer.validation(test_dl) 
-    # logger.info(f"Test metrics: {test_metrics}")
+    X_test, y_test = preprocessor.load_paths_labels(test_ids)
     
-    # test_ds_tomography = DynamicTomographyDataset(test_ids, transform=model.get_transform(), augment=False)
-    # test_dl_tomography = test_ds_tomography.get_loader()
-    # test_metrics_tomography = trainer.validation(test_dl_tomography)
-    # logger.info(f"Test metrics tomography: {test_metrics_tomography}")
+    test_ds = DynamicResampledNLST(X_test, y_test, augment=False)
+    test_dl = test_ds.get_loader(batch_size=config.batch_size)
+    
+    metrics, coco_results_dict = trainer.validation(test_dl)
+    # upload coco dict to wandb if enabled
+    trainer.save_ap_ar_plot(coco_results_dict)
