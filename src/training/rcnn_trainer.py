@@ -14,10 +14,13 @@ from config.config_2d import get_config
 from utils.metrics import iou_loss
 import numpy as np
 from torch.amp import GradScaler, autocast
-
+import tempfile
+import pandas as pd
+import matplotlib.pyplot as plt
 from monai.data import box_utils
 from monai.apps.detection.metrics.coco import COCOMetric
 from monai.apps.detection.metrics.matching import matching_batch
+import json
 
 class RCNNTrainer():
     def __init__(self,
@@ -257,7 +260,7 @@ class RCNNTrainer():
         val_epoch_metric_dict = coco_metric(results_metric)[0]
 
         self.logger.info(f"coco metrics: {val_epoch_metric_dict}")
-        return metrics
+        return metrics, val_epoch_metric_dict
 
     
     def validation_outlier_detection(self, dl: DataLoader) -> Dict[str, float]:
@@ -511,7 +514,7 @@ class RCNNTrainer():
             
             train_metrics = self.train_epoch(train_loader) 
             if epoch % validate_every == 0:
-                val_metrics = self.validation(val_loader)
+                val_metrics, _ = self.validation(val_loader)
             
             if self.scheduler is not None:
                 # self.scheduler.step(val_metrics['mAP@5:95']) # some schedulers may prefer to be called within the batch loop, but for now we'll call it at the end of the epoch
@@ -538,6 +541,32 @@ class RCNNTrainer():
             if patience_counter >= patience:
                 self.logger.info(f"Early stopping at epoch {epoch+1}")
                 break
-        wandb.finish()
         self.logger.info("Training complete")
-                
+    
+    def save_ap_ar_plot(self, coco_results_dict):
+        config = get_config()
+        # write on checkpoint dir
+        path = Path(config.checkpoint_dir)/ 'coco_results.json'
+        with open(path, 'w') as f:
+            json.dump(coco_results_dict, f)   
+        if config.use_wandb:
+            wandb.save(path)
+        ap = {k: v for k, v in coco_results_dict.items() if k.startswith('nodule_AP_IoU_')}
+        ar = {k: v for k, v in coco_results_dict.items() if k.startswith('nodule_AR_IoU_')}
+        x_range = np.arange(0.05, 1.0, step=0.05)
+        plt.figure(figsize=(10, 6))
+        plt.plot(x_range, list(ap.values()), marker='o', linestyle='-', label='3 channels')
+        plt.plot(x_range, list(ar.values()), marker='x', linestyle='--', label='Average Recall')
+        plt.legend()
+        plt.title('Average Precision and Recall at different IoU thresholds')
+        plt.xlabel('IoU Thresholds')
+        plt.ylabel('AP/AR')
+        plt.xticks(x_range, rotation=45)
+        plt.grid()
+        plt.ylim(-0.02, 1.0)
+        plt.tight_layout()
+        plt.savefig(Path(config.checkpoint_dir) / 'coco_ap_plot.png')
+        if config.use_wandb:
+            # log the plot to wandb
+            wandb.log({"coco_ap_plot": wandb.Image(str(Path(config.checkpoint_dir) / 'coco_ap_plot.png'))})
+            wandb.save(Path(config.checkpoint_dir) / 'coco_ap_plot.png')
