@@ -25,10 +25,11 @@ class FocalLossROIHeads(RoIHeads):
     def fastrcnn_loss(self, class_logits, box_regression, labels, regression_targets):
         labels = torch.cat(labels, dim=0)
         regression_targets = torch.cat(regression_targets, dim=0)
-        # ce = F.cross_entropy(class_logits, labels)
+        ce_loss = F.cross_entropy(class_logits, labels)
         
         # Replace CE loss with Focal Loss
-        ce_loss = self.focal_loss(class_logits, labels, alpha=0.25, gamma=2.0)
+        # ce_loss = self.focal_loss(class_logits, labels, alpha=0.25, gamma=2.0)
+        
         # Smooth L1 for regression
         sampled_pos_inds_subset = torch.where(labels > 0)[0]
         labels_pos = labels[sampled_pos_inds_subset]
@@ -42,11 +43,23 @@ class FocalLossROIHeads(RoIHeads):
             reduction="sum",
         )
         box_loss = box_loss / labels.numel()
-        # box_loss = self.giou_loss(box_regression[labels > 0], regression_targets[labels > 0])
+
+        # GIoU loss
+        # box_loss = self.giou_loss(box_regression[sampled_pos_inds_subset, labels_pos],
+        #                           regression_targets[sampled_pos_inds_subset],
+        #                           reduction="mean"
+        #                           )
         
+        # L2 loss
+        # box_loss = F.mse_loss(
+        #     box_regression[sampled_pos_inds_subset, labels_pos],
+        #     regression_targets[sampled_pos_inds_subset],
+        #     reduction="sum"
+        # ) / labels.numel() # isn't this just a mean reduction?
+                
         return ce_loss, box_loss
 
-    def giou_loss(self, pred_boxes, target_boxes):
+    def giou_loss(self, pred_boxes, target_boxes, reduction="none"):
         """
         pred_boxes, target_boxes: [N, 4] in (x1, y1, x2, y2)
         """
@@ -73,7 +86,15 @@ class FocalLossROIHeads(RoIHeads):
         area_c = (x2_c - x1_c) * (y2_c - y1_c)
 
         giou = iou - (area_c - union) / (area_c + 1e-7)
-        return 1 - giou  # loss
+        loss = 1 - giou
+        if reduction == 'none':
+            pass
+        elif reduction == 'sum':
+            loss = loss.sum()
+        elif reduction == 'mean':
+            loss = loss.mean() if loss.numel() > 0 else 0.0 * loss.sum()
+        
+        return loss
 
     def focal_loss(self, inputs, targets, alpha=0.25, gamma=2.0):
         ce = F.cross_entropy(inputs, targets, reduction='none')
