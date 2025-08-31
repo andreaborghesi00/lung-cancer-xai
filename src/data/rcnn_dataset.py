@@ -286,7 +286,7 @@ class DynamicResampledDLCS(Dataset):
             num_workers=self.config.dl_workers if num_workers is None else num_workers,
             collate_fn=lambda x: tuple(zip(*x)), # custom collate function to handle the target dictionary,
             persistent_workers=True,
-            prefetch_factor=2,
+            # prefetch_factor=2,
             pin_memory=True,
             **kwargs
         )       

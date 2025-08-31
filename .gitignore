@@ -17,3 +17,5 @@ detr_output/*
 *.csv
 src/scraps/*
 lightning_logs/*
+*.log
+ignored/*
