@@ -63,7 +63,30 @@ class ConvNeXtTiny(nn.Module):
         # Load a pre-trained ConvNeXt Tiny model
         self.base_model = convnext_tiny(weights=ConvNeXt_Tiny_Weights.IMAGENET1K_V1)
         # Replace the final fully connected layer to match the number of classes
-        self.base_model.classifier[2] = nn.Linear(self.base_model.classifier[2].in_features, num_classes)
+        # self.base_model.classifier[2] = nn.Linear(self.base_model.classifier[2].in_features, num_classes)
+        self.base_model.classifier[2] = ClassifierHead(in_features=self.base_model.classifier[2].in_features, num_classes=num_classes)
     
     def forward(self, x):
         return self.base_model(x)
+    
+class ClassifierHead(nn.Module):
+    def __init__(self, in_features, num_classes=2):
+        super(ClassifierHead, self).__init__()
+        self.classifier = nn.Sequential(
+            nn.Linear(in_features, 256),
+            nn.LayerNorm(256),
+            nn.SiLU(),
+            nn.Dropout(0.25),
+            nn.Linear(256, 512),
+            nn.LayerNorm(512),
+            nn.SiLU(),
+            nn.Dropout(0.25),
+            nn.Linear(512, 512),
+            nn.LayerNorm(512),
+            nn.SiLU(),
+            nn.Dropout(0.25),
+            nn.Linear(512, num_classes)
+        )
+    
+    def forward(self, x):
+        return self.classifier(x)
