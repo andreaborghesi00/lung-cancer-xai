@@ -29,9 +29,9 @@ def setup_logging(level=logging.INFO):
 def count_parameters(model: nn.Module):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def load_model(model_path: str, model_class: torch.nn.Module, device="cuda" if torch.cuda.is_available() else "cpu") -> torch.nn.Module:
+def load_model(model_path: str, model_class: torch.nn.Module, device="cuda" if torch.cuda.is_available() else "cpu", **kwargs) -> torch.nn.Module:
     """Load the model from checkpoint"""   
-    model = model_class().to(device)
+    model = model_class(**kwargs).to(device)
     
     try:
         checkpoint = torch.load(model_path, map_location="cuda")
