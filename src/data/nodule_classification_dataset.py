@@ -10,12 +10,22 @@ import random
 
 
 class DLCSNoduleClassificationDataset(Dataset):
-    def __init__(self, annotations_df, zoom_factor=0.8, min_size=64, augment:bool=False, shift_limits:tuple=(-5, 5), do_pad:bool=False):
+    def __init__(self, 
+                 annotations_df, 
+                 zoom_factor=0.8, 
+                 min_size=64, 
+                 augment:bool=False, 
+                 shift_limits:tuple=(-5, 5), 
+                 do_pad:bool=False,
+                 simulate_3ch:bool=False,
+                 square_patches:bool=False):
         """
         Args:
             annotations_df (pd.DataFrame): DataFrame containing nodule annotations.
             transform (callable, optional): Optional transform to be applied on a sample.
         """
+        self.square_patches = square_patches
+        self.simulate_3ch = simulate_3ch
         self.do_pad = do_pad
         self.shift_limits = shift_limits
         self.augment = augment
@@ -136,8 +146,24 @@ class DLCSNoduleClassificationDataset(Dataset):
         prev_slice = np.load(nid_slices[nid_slices['slice_id'] == curr_slice_id - 1]['path'].values[0]) if not nid_slices[nid_slices['slice_id'] == curr_slice_id - 1].empty else None
         succ_slice = np.load(nid_slices[nid_slices['slice_id'] == curr_slice_id + 1]['path'].values[0]) if not nid_slices[nid_slices['slice_id'] == curr_slice_id + 1].empty else None
         
-        img_3ch = self.build_3ch_input(prev_slice, curr_slice, succ_slice)    
-                    
+        if self.simulate_3ch:
+            img_3ch = self.build_3ch_input(prev_slice, curr_slice, succ_slice)    
+        else:
+            img_3ch = np.stack([curr_slice, curr_slice, curr_slice], axis=-1)  # to format (H, W, 3)
+        
+        if self.square_patches:
+            # make the bbox square by expanding the shorter side
+            width = bbox[2] - bbox[0]
+            height = bbox[3] - bbox[1]
+            if width > height:
+                diff = width - height
+                bbox[1] = max(0, bbox[1] - diff // 2)
+                bbox[3] = min(img_3ch.shape[0], bbox[3] + diff // 2 + diff % 2)
+            else:
+                diff = height - width
+                bbox[0] = max(0, bbox[0] - diff // 2)
+                bbox[2] = min(img_3ch.shape[1], bbox[2] + diff // 2 + diff % 2)
+        
         nodule, _ = self.extract_nodule(img_3ch, bbox, perc=self.zoom_factor, rand_shift=self.augment, shift_limits=self.shift_limits)
         nodule = np.clip(nodule, self.hu_min, self.hu_max)
         nodule = (nodule - self.hu_min) / (self.hu_max - self.hu_min)
@@ -168,3 +194,4 @@ class DLCSNoduleClassificationDataset(Dataset):
                           persistent_workers=True,
                           **kwargs
                           )
+        
