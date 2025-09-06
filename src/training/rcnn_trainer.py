@@ -555,8 +555,8 @@ class RCNNTrainer():
         ar = {k: v for k, v in coco_results_dict.items() if k.startswith('nodule_AR_IoU_')}
         x_range = np.arange(0.05, 1.0, step=0.05)
         plt.figure(figsize=(10, 6))
-        plt.plot(x_range, list(ap.values()), marker='o', linestyle='-', label='3 channels')
-        plt.plot(x_range, list(ar.values()), marker='x', linestyle='--', label='Average Recall')
+        plt.plot(x_range, list(ap.values()), marker='o', linestyle='-', label='Average Precision')
+        plt.plot(x_range, list(ar.values()), marker='x', linestyle='-', label='Average Recall')
         plt.legend()
         plt.title('Average Precision and Recall at different IoU thresholds')
         plt.xlabel('IoU Thresholds')
@@ -568,5 +568,11 @@ class RCNNTrainer():
         plt.savefig(Path(config.checkpoint_dir) / 'coco_ap_plot.png')
         if config.use_wandb:
             # log the plot to wandb
-            wandb.log({"coco_ap_plot": wandb.Image(str(Path(config.checkpoint_dir) / 'coco_ap_plot.png'))})
+            wandb.log({"coco_ap_plot": wandb.Image(str(Path(config.checkpoint_dir) / 'coco_ap_ar_plot.png'))})
             wandb.save(Path(config.checkpoint_dir) / 'coco_ap_plot.png')
+            # save the numpys of ap and ar as well on wandb
+            np.save(Path(config.checkpoint_dir) / 'coco_ap.npy', np.array(list(ap.values())))
+            np.save(Path(config.checkpoint_dir) / 'coco_ar.npy', np.array(list(ar.values())))
+            wandb.save(Path(config.checkpoint_dir) / 'coco_ap.npy')
+            wandb.save(Path(config.checkpoint_dir) / 'coco_ar.npy')
+        plt.close()
