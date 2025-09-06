@@ -4,11 +4,9 @@ os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
 import logging
 import random
 from config.config_2d import get_config
-from data.rcnn_dataset import DynamicRCNNDataset, DynamicResampledNLST, DynamicResampledDLCS
-from data.tomography_dataset import DynamicTomographyDataset
+from data.rcnn_dataset import DynamicRCNNDataset, DynamicResampledNLST, DynamicResampledDLCS, DynamicResampledDLCSOld
 from training.rcnn_trainer import RCNNTrainer
 import utils.utils as utils
-from models.faster_rcnn import FasterRCNNMobileNet, FasterRCNNResnet50, FasterRCNNEfficientNetv2s
 from explainers.cam_explainer import CAMExplainer, CustomGradCAM, fasterrcnn_reshape_transform, SSCAM, FasterRCNNBoxScoreTarget
 from utils.visualization import Visualizer
 from tqdm import tqdm
@@ -25,8 +23,11 @@ from pytorch_grad_cam.metrics.cam_mult_image import DropInConfidence, IncreaseIn
 import matplotlib.pyplot as plt
 from PIL import Image
 import cv2
-from models.retinanet import RetinaNetResnet50, RetinaNetEfficientNetv2s
 import pandas as pd
+import argparse
+import models.faster_rcnn as frcnn
+import models.retinanet as rn
+from torch.utils.data import DataLoader
 def _get_image_from_tomo(tomo, idx):
     image = tomo[idx].squeeze(0).cpu().numpy().transpose(1, 2, 0)
     return image
@@ -62,7 +63,7 @@ def segmenter_score(cam_heatmap, true_boxes):
             pg_cam[y, x] = 1
     return points_inside / tot_points if tot_points > 0 else 0, top_activations, pg_cam
 
-def adaptive_segmenter_score(cam_heatmap, true_boxes):
+def adaptive_segmenter_score(cam_heatmap, true_boxes, adaptive_multiplier=1.):
     """
     like segmenter score but the threshold is adaptive.
     Meaning that the threshold adapts to the area of the bounding box.
@@ -73,10 +74,11 @@ def adaptive_segmenter_score(cam_heatmap, true_boxes):
     for bbox in true_boxes:
         x1, y1, x2, y2 = bbox
         area = (x2 - x1) * (y2 - y1)
+        area += adaptive_multiplier * area # increase area by a multiplier to account for small boxes and noise
         # find the percentile of the cam heatmap that corresponds to the area of the bounding box
         cam_area = cam_heatmap.shape[0] * cam_heatmap.shape[1]
         percentile = (area / float(cam_area)) * 100
-        threshold = np.percentile(cam_heatmap, 100 - percentile)
+        threshold = np.percentile(cam_heatmap, 100 - percentile) 
         top_activations = np.where(cam_heatmap >= threshold)
         points_inside = 0
         tot_points = len(top_activations[0])
@@ -91,25 +93,146 @@ def adaptive_segmenter_score(cam_heatmap, true_boxes):
                 pg_cam[y, x] = 1
     return points_inside / tot_points if tot_points > 0 else 0, top_activations, pg_cam
 
+import numpy as np
+import math
+
+def calculate_normalized_inverse_distance_score(cam_heatmap,
+                                                true_boxes,
+                                                adaptive_multiplier=1.,
+                                                norm_order=2):
+    """
+    Calculates a score based on the normalized distance of the most activated pixels to the ground-truth box.
+
+    This metric is more robust to noise than a simple in/out check. It uses an adaptive
+    threshold to select a number of top pixels proportional to the ground-truth box area.
+
+    Args:
+        cam_heatmap (np.ndarray): The 2D CAM activation map.
+        true_boxes (list): A list of bounding boxes, e.g., [[x1, y1, x2, y2]]. 
+                           This implementation considers only the first box.
+        adaptive_multiplier (float): A factor to increase the considered area, accounting
+                                     for small localization errors. A value of 1.0 doubles it.
+
+    Returns:
+        float: A score between 0 and 1. Higher is better, with 1 meaning all considered
+               pixels are inside the ground-truth box.
+        tuple: The coordinates of the top activated pixels considered for the score.
+    """
+    # if not true_boxes:
+    #     return 0.0, ([], [])
+
+    pg_cam = np.zeros_like(cam_heatmap)
+    # We assume one box per image as specified
+    bbox = true_boxes[0]
+    x1, y1, x2, y2 = bbox
+    
+    # --- Adaptive Selection of Top Pixels (from your original code) ---
+    box_area = (x2 - x1) * (y2 - y1)
+    # The multiplier helps select a slightly larger area of pixels to be more robust
+    target_area = box_area + (adaptive_multiplier * box_area)
+    
+    cam_area = cam_heatmap.shape[0] * cam_heatmap.shape[1]
+    # Ensure percentile is within a valid range [0, 100]
+    percentile = min(100, max(0, (target_area / float(cam_area)) * 100))
+    
+    if percentile == 0:
+        return 0.0, ([], [])
+
+    threshold = np.percentile(cam_heatmap, 100 - percentile)
+    top_activations = np.where(cam_heatmap >= threshold)
+
+    if len(top_activations[0]) == 0:
+        return 0.0, ([], [])
+        
+    # --- New Distance-Based Scoring Logic ---
+    h, w = cam_heatmap.shape
+    image_diagonal = math.sqrt(h**2 + w**2)
+    
+    normalized_distances = []
+    
+    # Iterate over each of the top activated pixels
+    for y, x in zip(*top_activations):
+        # Find the closest point on the bounding box to the current pixel (x, y)
+        closest_x = np.clip(x, x1, x2)
+        closest_y = np.clip(y, y1, y2)
+        
+        # The distance is 0 if the point is inside the box
+        if norm_order == 2:
+            distance = math.sqrt((x - closest_x)**2 + (y - closest_y)**2)
+        else:
+            dx = np.abs(x - closest_x)
+            dy = np.abs(y - closest_y)        
+            distance = np.power(np.power(dx, norm_order) + np.power(dy, norm_order), 1. / norm_order)
+        
+        # Normalize the distance by the image diagonal
+        normalized_distance = distance / image_diagonal
+        normalized_distances.append(normalized_distance)
+        
+        # For visualization purposes
+        if distance == 0:
+            pg_cam[y, x] = 90
+        else:
+            pg_cam[y, x] = 1
+        
+    # The score is 1 minus the average normalized distance
+    # This rewards pixels for being close to or inside the box
+    score = 1.0 - np.mean(normalized_distances)
+    
+    return score, top_activations, pg_cam
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train a model on the DLCS dataset.")
+    parser.add_argument("--config", type=str, default=None, help="Path to the configuration file.")
+    parser.add_argument("--model", type=str, default="FasterRCNNEfficientNetv2s", help="Model to use for training.")
+    parser.add_argument("--pretrain", type=str, default="FasterRCNNEfficientNetv2s/checkpoint_epoch_best.pt", help="Load pretrained model from checkpoint.")
+    parser.add_argument("--cam", type=str, default="eigencam", help="Type of CAM to use for explanation")
+    
+    args = parser.parse_args()
     config = get_config()
     config.validate()
     logger = logging.getLogger(__name__)
     utils.setup_logging(level=logging.INFO)
     
     device = torch.device(config.device if torch.cuda.is_available() else "cpu")
-    
+    #nohup parallel --colsep '\t' --joblog joblog_dlcs_pretrained.log -j1 python src/train_od_dlcs.py --config=src/config/config_2d.yaml --model {1} --pretrain {2} :::: pairs_models_pretraining_remainder.txt > parallel_dlcs_pretrain_remainder.log 2>&1 &
     #load model
-    model_path = Path(config.checkpoint_dir) / config.model_checkpoint
-    logger.info(f"Loading model from checkpoint from {model_path}")
+    model_class = None
+    if str.lower(args.model) == "fasterrcnnefficientnetv2s":
+        model_class = frcnn.FasterRCNNEfficientNetv2s
+    elif str.lower(args.model) == "fasterrcnnmobilenet":
+        model_class = frcnn.FasterRCNNMobileNet
+    elif str.lower(args.model) == "fasterrcnnresnet50":
+        model_class = frcnn.FasterRCNNResnet50
+    elif str.lower(args.model) == "retinanetresnet50":
+        model_class = rn.RetinaNetResnet50
+    elif str.lower(args.model) == "retinanetefficientnetv2s":
+        model_class = rn.RetinaNetEfficientNetv2s
+    elif str.lower(args.model) == "retinanetmobilenet":
+        model_class = rn.RetinaNetMobileNet
+    else:
+        raise ValueError(f"Unknown model: {args.model}. Supported models are: FasterRCNN, RetinaNet.")
 
-    # model = utils.load_model(model_path, FasterRCNNResnet50, device=device)
-    # model = utils.load_model(model_path, FasterRCNNMobileNet, device=device)
-    model = utils.load_model(model_path, FasterRCNNEfficientNetv2s, device=device)
-    # model = utils.load_model(model_path, RetinaNetResnet50, device=device)
-    # model = utils.load_model(model_path, RetinaNetEfficientNetv2s, device=device)
-    model.eval()
+    cam_class = None
+    if str.lower(args.cam) == "eigencam":
+        cam_class = EigenCAM
+    elif str.lower(args.cam) == "scorecam":
+        cam_class = ScoreCAM
+    elif str.lower(args.cam) == "sscam":
+        cam_class = SSCAM
+
+    config.visualization_experiment_name += str.lower(args.cam) + "/"
+    config.visualization_experiment_name += str.lower(model_class.__name__) + "/"
     
+    try:
+        model_path = Path(config.checkpoint_dir) / args.pretrain
+        logger.info(f"Loading model from checkpoint from {model_path}")
+
+        model = utils.load_model(model_path, model_class, device=device)
+    except FileNotFoundError:
+        logger.info(f"No pretrained model found in {config.checkpoint_dir} at {args.pretrain}. \nStopping execution")
+        exit(1)
+            
+    model.eval()
     logger.info(model.model.backbone)
 
     # load data
@@ -124,7 +247,6 @@ if __name__ == "__main__":
     # SHARED
     _, valtest_ids = train_test_split(unique_tomographies, test_size=(1-config.train_split_ratio), random_state=config.random_state)
     _, test_ids = train_test_split(valtest_ids, test_size=(1-config.val_test_split_ratio), random_state=config.random_state)
-    # _, test_ids = train_test_split(valtest_ids, test_size=0.15, random_state=69420)
     
     # NLST
     # X_test, y_test = preprocessor.load_paths_labels(test_ids)
@@ -138,9 +260,15 @@ if __name__ == "__main__":
     class_test = annotations[annotations['pid'].isin(test_ids)]['is_benign'].values    
     class_test = torch.tensor(class_test, dtype=torch.float32)
     test_ds = DynamicResampledDLCS(X_test, boxes_test, class_test, augment=False)
-    
+    # subset_test_ds = torch.utils.data.Subset(test_ds, list(range(0, len(test_ds), 10))) # subsample for faster testing
     # SHARED
     test_dl = test_ds.get_loader(batch_size=1)
+    # test_dl = DataLoader(subset_test_ds,
+                        #  batch_size=1,
+                        #  shuffle=False,
+                        #  num_workers=4,
+                        #  collate_fn=lambda x: tuple(zip(*x))
+                        #  )
     # test_ds_tomo = DynamicTomographyDataset(test_ids, transform=model.get_transform())
     # test_dl_tomo = test_ds_tomo.get_loader(batch_size=1)
     
@@ -148,17 +276,17 @@ if __name__ == "__main__":
     gc.collect()
     
     # test model
-    trainer = RCNNTrainer(model=model,
-                            optimizer=None,
-                            scheduler=None,
-                            device=device,
-                            checkpoint_dir=config.checkpoint_dir,
-                            use_wandb=False # we're not actually training here
-                          )
+    # trainer = RCNNTrainer(model=model,
+    #                         optimizer=None,
+    #                         scheduler=None,
+    #                         device=device,
+    #                         checkpoint_dir=config.checkpoint_dir,
+    #                         use_wandb=False # we're not actually training here
+    #                       )
     
-    metrics, coco_dict = trainer.validation(test_dl)
-    logger.info(f"Validation metrics: {metrics}")
-    exit()
+    # metrics, coco_dict = trainer.validation(test_dl)
+    # logger.info(f"Validation metrics: {metrics}")
+    # exit()
     
     visualizer = Visualizer()    
 
@@ -166,16 +294,16 @@ if __name__ == "__main__":
     # logger.info(model.model.backbone)
     # inverse_layer_nums = [1,2,3]
     # target_layers = [[list(model.model.backbone.body.children())[-(i+1)]] for i in inverse_layer_nums] # get last layer for RCNN model, unfortunately this is model specific
-    # target_layers = [list(model.model.backbone.fpn.inner_blocks.children())[-1]]
+    target_layers = [list(model.model.backbone.fpn.inner_blocks.children())[-1], list(model.model.backbone.fpn.inner_blocks.children())[-2]]
     # target_layers = list(model.model.backbone.fpn.inner_blocks.children()) + list(model.model.backbone.fpn.layer_blocks.children())
-    target_layers = [list(model.model.backbone.fpn.layer_blocks.children())[-1]]
+    # target_layers = [list(model.model.backbone.fpn.layer_blocks.children())[-1]]
     # target_layers = [list(model.model.backbone.body.children())[-1]]
     # target_layers = [model.model.backbone]
     
     logger.info(f"Target layers: {target_layers}")
     # apply the explainer to the test samples
     # explainers = [CAMExplainer(model=model, target_layer=target_layer, cam_class=EigenCAM) for target_layer in target_layers]
-    explainer = CAMExplainer(model=model, target_layer=target_layers, cam_class=EigenCAM, reshape_transform=None)
+    explainer = CAMExplainer(model=model, target_layer=target_layers, cam_class=cam_class, reshape_transform=None)
     # explainer = CAMExplainer(model=model, target_layer=target_layers, cam_class=AblationCAM, reshape_transform=fasterrcnn_reshape_transform)
 
     # iou_thresholds = np.arange(0.0, 1.0, 0.1)
@@ -218,52 +346,58 @@ if __name__ == "__main__":
             true_boxes = target[0]['boxes'] # ground truth boxes
             image_numpy = image.detach().squeeze(0).cpu().numpy()
             image_numpy = image_numpy.transpose(1,2,0) # convert to numpy and convert from (C, H, W) to (H, W, C)
-            if False:
-                try:
-                    bboxes = pred_boxes.cpu().numpy()
-                    mask = box_to_mask(image_numpy.shape[:2], bboxes)
-                    grayscale_cam = explainer.explain(image=image, labels=[1] * len(bboxes), bboxes=bboxes, scores=scores, iou_threshold=iou_threshold)
+            # if False:
+            try:
+                bboxes = pred_boxes.cpu().numpy()
+                mask = box_to_mask(image_numpy.shape[:2], bboxes)
+                grayscale_cam = explainer.explain(image=image, labels=[1] * len(bboxes), bboxes=bboxes, scores=scores, iou_threshold=iou_threshold)
 
-                    pg_score, top_activations, pg_cam = adaptive_segmenter_score(grayscale_cam[0], true_boxes.cpu().numpy())
-                    logger.info(f"Pointing game score: {pg_score}")
-                    pg_scores.append(pg_score)
-                except Exception as e:
-                    logger.error(f"Failed to generate CAM for sample {id}: {str(e)}")
-                    continue
-                
-                visualization = explainer.visualize(image=image_numpy, cam=grayscale_cam[0] ** 2)
-                point_vis = explainer.visualize(image=image_numpy, cam=pg_cam)
+                # pg_score, top_activations, pg_cam = adaptive_segmenter_score(grayscale_cam[0], true_boxes.cpu().numpy())
+                pg_score, top_activations, pg_cam = calculate_normalized_inverse_distance_score(grayscale_cam[0],
+                                                                                                true_boxes.cpu().numpy(),
+                                                                                                adaptive_multiplier=1.8,
+                                                                                                norm_order=6)
+                logger.info(f"Inverse distance score: {pg_score}")
+                pg_scores.append(pg_score)
+            except Exception as e:
+                logger.error(f"Failed to generate CAM for sample {id}: {str(e)}")
+                continue
             
-            
-            visualizer.display_bboxes(
-                input=image_numpy,
-                pred_boxes=pred_boxes,
-                true_boxes=true_boxes,
-                scores=scores,
-                filename=f"sample_{id}.png",
-                cmap='gray'
-            )
+            # image_numpy = image_numpy[:,:,1] # take only the center slice (current)
+            # image_numpy = image_numpy[:, :, np.newaxis] # add channel dimension
+            visualization = explainer.visualize(image=image_numpy, cam=grayscale_cam[0] ** 2)
+            point_vis = explainer.visualize(image=image_numpy, cam=pg_cam)
             
             
             # visualizer.display_bboxes(
-            #     input=visualization,
+            #     input=visualization, # display only the center slice (current)
             #     pred_boxes=pred_boxes,
             #     true_boxes=true_boxes,
             #     scores=scores,
             #     filename=f"sample_{id}.png",
-            #     title=f"PG Score: {pg_score:.2f}",
+            #     cmap='gray'
             # )
+        # exit()
             
-            # visualizer.display_bboxes(
-            #     input=point_vis,
-            #     pred_boxes=np.array([]),
-            #     true_boxes=true_boxes,
-            #     scores=np.array([]),
-            #     filename=f"sample_{id}_pointgame.png",
-            # )
-            # pbar.set_postfix({"Avg Segmenter Score": np.array(pg_scores).mean()})
+            visualizer.display_bboxes(
+                input=visualization,
+                pred_boxes=pred_boxes,
+                true_boxes=true_boxes,
+                scores=scores,
+                filename=f"sample_{id}.png",
+                title=f"Score: {pg_score:.2f}",
+            )
+            
+            visualizer.display_bboxes(
+                input=point_vis,
+                pred_boxes=np.array([]),
+                true_boxes=true_boxes,
+                scores=np.array([]),
+                filename=f"sample_{id}_segmenter.png",
+            )
+            pbar.set_postfix({"Avg Score": np.array(pg_scores).mean()})
         
         # save pg_scores as numpy
         pg_scores = np.array(pg_scores)
-        np.save(f"eigencam_adaptive_segmenter.npy", pg_scores)
-        logger.info(f"Average Segmenter Score: {pg_scores / float(len(test_dl))}")
+        np.save(Path(config.visualization_dir) / f"{cam_class.__name__}_{model_class.__name__}_distance_scores_2x.npy", pg_scores)
+        logger.info(f"Average Score: {np.sum(pg_scores) / float(len(test_dl))}")
