@@ -19,6 +19,9 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
 from utils.focal_loss import FocalLoss
 from data.samplers import CurriculumBalancedSampler
+import argparse
+from sklearn.metrics import f1_score
+import utils.utils as utils
 
 config = get_config()
 DEVICE = torch.device(config.device if torch.cuda.is_available() else "cpu")
@@ -89,7 +92,7 @@ def train_epoch(model:Module, optimizer:Optimizer, dl: DataLoader, criterion, sc
     
     return epoch_loss, epoch_acc
 
-def validation_epoch(model:Module, dl:DataLoader, criterion):
+def validation_epoch(model:Module, dl:DataLoader, criterion, upload_cm:bool=False):
     global config, DEVICE
     val_loss = 0.0
     val_correct = 0
@@ -119,25 +122,66 @@ def validation_epoch(model:Module, dl:DataLoader, criterion):
     val_acc = val_correct / val_total
 
     # Compute confusion matrix
+    all_labels = ["benign" if label == 1 else "malignant" for label in all_labels]
+    all_preds = ["benign" if pred == 1 else "malignant" for pred in all_preds]
     cm = confusion_matrix(all_labels, all_preds, normalize='true')
+    # set the labels to be "malignant" and "benign"
     disp = ConfusionMatrixDisplay(confusion_matrix=cm)
     disp.plot(cmap='viridis', xticks_rotation='vertical')
     plt.title("Validation Confusion Matrix")
     plt.tight_layout()
-    plt.savefig(f"confusion_matrix_{model.__class__.__name__}_val_norm.png")  # save to file
+    cm_norm_path = Path(f"confusion_matrix_{model.__class__.__name__}_val_norm.png")
+    plt.savefig(cm_norm_path)  # save to file
+    plt.close()
+    if upload_cm and config.use_wandb:
+        wandb.log({"cm_norm": wandb.Image(str(cm_norm_path))})
+    
+    
+    cm = confusion_matrix(all_labels, all_preds, labels=["malignant", "benign"])
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+    disp.plot(cmap='viridis', xticks_rotation='vertical')
+    plt.title("Validation Confusion Matrix")
+    plt.tight_layout()
+    cm_path = Path(f"confusion_matrix_{model.__class__.__name__}_val.png")
+    plt.savefig(cm_path)  # save to file
     plt.close()
     
-    cm = confusion_matrix(all_labels, all_preds)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
-    disp.plot(cmap='viridis', xticks_rotation='vertical')
-    plt.title("Validation Confusion Matrix")
-    plt.tight_layout()
-    plt.savefig(f"confusion_matrix_{model.__class__.__name__}_val.png")  # save to file
-    plt.close()
-    return val_loss, val_acc
+    if upload_cm and config.use_wandb:
+        wandb.log({"cm": wandb.Image(str(cm_path))})
+    
+    # Compute F1 scores for each class
+    f1_malignant = f1_score(all_labels, all_preds, pos_label="malignant")
+    f1_benign = f1_score(all_labels, all_preds, pos_label="benign")
+    f1_avg = (f1_malignant + f1_benign) / 2.0
+    if config.use_wandb:
+        wandb.log({"f1_malignant": f1_malignant, "f1_benign": f1_benign, "f1_avg": f1_avg})
+        
+    return val_loss, val_acc, f1_avg
         
 def main():
     global config, DEVICE, logger
+    
+    parser = argparse.ArgumentParser(description="Nodule Classification Training")
+    parser.add_argument("--model", type=str, default="ConvNeXtTiny", help="Model architecture to use.")
+    parser.add_argument("--square_patches", type=int, default=1, help="Whether to use square patches (1) or not (0).")
+    
+    args = parser.parse_args()
+    
+    model_class = None
+    if str.lower(args.model) == "resnet18":
+        model_class = Resnet18
+    elif str.lower(args.model) == "mobilenet":
+        model_class = MobileNet
+    elif str.lower(args.model) == "efficientnetv2s":
+        model_class = EfficientNetv2s
+    elif str.lower(args.model) == "densenet121":
+        model_class = DenseNet121
+    elif str.lower(args.model) == "convnexttiny":
+        model_class = ConvNeXtTiny
+    else:
+        raise ValueError(f"Unknown model: {args.model}. Supported models are: Resnet18, MobileNet, EfficientNetv2s, DenseNet121, ConvNeXtTiny.")
+    
+    square_patches = bool(args.square_patches)
     
     # Load annotations
     annotations_df = pd.read_csv(config.annotation_path)
@@ -190,6 +234,7 @@ def main():
 
         # Define difficulty as inverse of ease (higher is harder)
         df["difficulty"] = 1 - 0.5 * (df["hu_norm"] + df["area_norm"])
+        
         # normalize difficulty to [0, 1]
         df["difficulty"] = (df["difficulty"] - df["difficulty"].min()) / (df["difficulty"].max() - df["difficulty"].min())
         return df
@@ -206,26 +251,33 @@ def main():
     
     # Create datasets
     # train_dataset = DLCSNoduleClassificationDataset(train_annotations, min_size=64, augment=config.augment, zoom_factor=0.8)
-    train_dataset = DLCSNoduleClassificationDataset(train_annotations_oversampled, min_size=64, augment=config.augment, zoom_factor=0.8)
-    val_dataset = DLCSNoduleClassificationDataset(val_annotations, min_size=64, augment=False, zoom_factor=0.8)
+    train_dataset = DLCSNoduleClassificationDataset(train_annotations_oversampled,
+                                                    min_size=64, 
+                                                    augment=config.augment, 
+                                                    zoom_factor=0.8, 
+                                                    simulate_3ch=True,
+                                                    square_patches=square_patches)
+    
+    val_dataset = DLCSNoduleClassificationDataset(val_annotations, 
+                                                  min_size=64, 
+                                                  augment=False, 
+                                                  zoom_factor=0.8, 
+                                                  simulate_3ch=True,
+                                                  square_patches=square_patches)
     
     
     # Create data loaders
-    train_loader = train_dataset.get_loader(batch_size=config.batch_size, shuffle=False, num_workers=config.dl_workers, sampler=sampler)
+    train_loader = train_dataset.get_loader(batch_size=config.batch_size, shuffle=True, num_workers=config.dl_workers)
     val_loader = val_dataset.get_loader(batch_size=config.batch_size, shuffle=False, num_workers=config.dl_workers)
 
-    # model = Resnet18(num_classes=1)
-    # model = MobileNet(num_classes=1)
-    # model = DenseNet121(num_classes=1)
-    model = ConvNeXtTiny(num_classes=1)
-    # model = EfficientNetv2s(num_classes=1)
-    model.to(DEVICE)
+    model = model_class(num_classes=1) 
     
+    model.to(DEVICE)
     if config.use_wandb:
         wandb.init(project="nodule-classification",
                    config=config,
-                   name=f"{model.__class__.__name__} prev-succ 3ch",
-                   notes="")
+                   name=f"{model.__class__.__name__} 3ch - {'square' if square_patches else 'original AR'} patches - F1",
+                   notes="oversampled, augmented, zoom_factor=0.8, min_size=64, focal loss")
         wandb.watch(model, log="all", log_freq=300)
 
     
@@ -237,16 +289,16 @@ def main():
     logger.info(f"Model initialized: {model.__class__.__name__} with {sum(p.numel() for p in model.parameters() if p.requires_grad)} trainable parameters")
     scaler = GradScaler(enabled=config.amp)
     
-    best_val_acc = -1.0
+    best_f1_avg = -1.0
     patience_counter = 0
     # Training loop
     for epoch in range(config.epochs):
         if patience_counter >= config.patience:
-            logger.info(f"Early stopping at epoch {epoch + 1} with best validation accuracy: {best_val_acc:.4f}")
+            logger.info(f"Early stopping at epoch {epoch + 1} with best validation accuracy: {best_f1_avg:.4f}")
             break
         
         epoch_loss, epoch_acc = train_epoch(model, optimizer, train_loader, criterion, scaler)
-        val_loss, val_acc = validation_epoch(model, val_loader, criterion)        
+        val_loss, val_acc, f1_avg = validation_epoch(model, val_loader, criterion)        
         scheduler.step()
 
         metrics = {
@@ -254,13 +306,14 @@ def main():
             "train_loss": epoch_loss,
             "train_accuracy": epoch_acc,
             "val_loss": val_loss,
-            "val_accuracy": val_acc
+            "val_accuracy": val_acc,
+            "f1_score_avg": f1_avg
         }
         
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        if f1_avg > best_f1_avg:
+            best_f1_avg = f1_avg
             save_checkpoint(model=model, optimizer=optimizer, scheduler=scheduler, name="best", metrics=metrics)
-            logger.info(f"New best model saved at epoch {epoch + 1} with validation accuracy: {val_acc:.4f}")
+            logger.info(f"New best model saved at epoch {epoch + 1} with F1 score: {f1_avg:.4f}")
             patience_counter = 0
         else:   
             patience_counter += 1
@@ -268,6 +321,12 @@ def main():
 
         if config.use_wandb:
             wandb.log(metrics)
+    
+    # load best model for evaluation
+    best_checkpoint_path = Path(config.checkpoint_dir) / "nodule_classification" / model.__class__.__name__ / model.__class__.__name__ /f"checkpoint_best.pt"
+    model = utils.load_model(best_checkpoint_path, model_class=model_class, device=DEVICE, num_classes=1)
+    val_loss, val_acc = validation_epoch(model, val_loader, criterion, upload_cm=True)
+    logger.info(f"Best model validation accuracy: {val_acc:.4f} with loss: {val_loss:.4f}")
     
     if config.use_wandb:
         wandb.finish()
