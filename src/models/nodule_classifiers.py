@@ -12,7 +12,8 @@ class Resnet18(nn.Module):
         # Load a pre-trained ResNet model
         self.base_model = models.resnet18(pretrained=True)
         # Replace the final fully connected layer to match the number of classes
-        self.base_model.fc = nn.Linear(self.base_model.fc.in_features, num_classes)
+        # self.base_model.fc = nn.Linear(self.base_model.fc.in_features, num_classes)
+        self.base_model.fc = ClassifierHead(in_features=self.base_model.fc.in_features, num_classes=num_classes)
     
     def forward(self, x):
         return self.base_model(x)
@@ -30,7 +31,8 @@ class MobileNet(nn.Module):
         # Load a pre-trained MobileNet model
         self.base_model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.IMAGENET1K_V1)
         # Replace the final fully connected layer to match the number of classes
-        self.base_model.classifier[1] = nn.Linear(self.base_model.classifier[1].in_features, num_classes)
+        # self.base_model.classifier[1] = nn.Linear(self.base_model.classifier[1].in_features, num_classes)
+        self.base_model.classifier[1] = ClassifierHead(in_features=self.base_model.classifier[1].in_features, num_classes=num_classes)
     
     def forward(self, x):
         return self.base_model(x)
@@ -41,7 +43,8 @@ class EfficientNetv2s(nn.Module):
         # Load a pre-trained EfficientNet V2 model
         self.base_model = efficientnet_v2_s(weights=EfficientNet_V2_S_Weights.IMAGENET1K_V1)
         # Replace the final fully connected layer to match the number of classes
-        self.base_model.classifier[1] = nn.Linear(self.base_model.classifier[1].in_features, num_classes)
+        # self.base_model.classifier[1] = nn.Linear(self.base_model.classifier[1].in_features, num_classes)
+        self.base_model.classifier[1] = ClassifierHead(in_features=self.base_model.classifier[1].in_features, num_classes=num_classes)
     
     def forward(self, x):
         return self.base_model(x)
@@ -52,7 +55,8 @@ class DenseNet121(nn.Module):
         # Load a pre-trained DenseNet model
         self.base_model = densenet121(weights=DenseNet121_Weights.IMAGENET1K_V1)
         # Replace the final fully connected layer to match the number of classes
-        self.base_model.classifier = nn.Linear(self.base_model.classifier.in_features, num_classes)
+        # self.base_model.classifier = nn.Linear(self.base_model.classifier.in_features, num_classes)
+        self.base_model.classifier = ClassifierHead(in_features=self.base_model.classifier.in_features, num_classes=num_classes)
     
     def forward(self, x):
         return self.base_model(x)
