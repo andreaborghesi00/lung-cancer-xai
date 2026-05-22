@@ -19,3 +19,4 @@ src/scraps/*
 lightning_logs/*
 *.log
 ignored/*
+requirements.txt
